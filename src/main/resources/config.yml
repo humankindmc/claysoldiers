@@ -25,6 +25,28 @@
     health-bar-segments: 10
     healthy-threshold: 0.60
     low-threshold: 0.30
+    health-bar:
+      prefix: "["
+      suffix: "]"
+      filled-symbol: "|"
+      lost-symbol: "|"
+      empty-symbol: "-"
+      healthy-color: green
+      injured-color: yellow
+      low-color: red
+      lost-color: red
+      bracket-color: dark_gray
+
+  crafting:
+    enabled: true
+    # Dynamic upgrade crafting: one clay soldier doll plus one ingredient.
+    # Role upgrades only apply to base warrior dolls and preserve team/modifiers.
+    team-recoloring-enabled: true
+    role-upgrades:
+      guard: IRON_INGOT
+      spearman: BAMBOO
+      skirmisher: FEATHER
+      slinger: SNOWBALL
 
   movement:
     # Random movement rolls: lower means more frequent wandering. 1 means every AI tick.
@@ -157,6 +179,92 @@
       formation-depth: 1.20
       main-hand: SNOWBALL
       off-hand: none
+
+  modifiers:
+    reinforced:
+      enabled: true
+      ingredient: IRON_NUGGET
+      health-multiplier-bonus: 0.25
+      damage-multiplier-bonus: 0.0
+      speed-multiplier-bonus: 0.0
+      range-multiplier-bonus: 0.0
+      cooldown-multiplier: 1.0
+      splash-radius: 0.0
+      splash-damage-multiplier: 0.0
+      venom-damage: 0.0
+      lifesteal-amount: 0.0
+    swift:
+      enabled: true
+      ingredient: SUGAR
+      health-multiplier-bonus: 0.0
+      damage-multiplier-bonus: 0.0
+      speed-multiplier-bonus: 0.25
+      range-multiplier-bonus: 0.0
+      cooldown-multiplier: 0.86
+      splash-radius: 0.0
+      splash-damage-multiplier: 0.0
+      venom-damage: 0.0
+      lifesteal-amount: 0.0
+    fierce:
+      enabled: true
+      ingredient: FLINT
+      health-multiplier-bonus: 0.0
+      damage-multiplier-bonus: 0.25
+      speed-multiplier-bonus: 0.0
+      range-multiplier-bonus: 0.0
+      cooldown-multiplier: 1.0
+      splash-radius: 0.0
+      splash-damage-multiplier: 0.0
+      venom-damage: 0.0
+      lifesteal-amount: 0.0
+    longshot:
+      enabled: true
+      ingredient: AMETHYST_SHARD
+      health-multiplier-bonus: 0.0
+      damage-multiplier-bonus: 0.0
+      speed-multiplier-bonus: 0.0
+      range-multiplier-bonus: 0.35
+      cooldown-multiplier: 1.0
+      splash-radius: 0.0
+      splash-damage-multiplier: 0.0
+      venom-damage: 0.0
+      lifesteal-amount: 0.0
+    explosive:
+      enabled: true
+      ingredient: FIRE_CHARGE
+      health-multiplier-bonus: 0.0
+      damage-multiplier-bonus: 0.0
+      speed-multiplier-bonus: 0.0
+      range-multiplier-bonus: 0.0
+      cooldown-multiplier: 1.12
+      splash-radius: 1.15
+      splash-damage-multiplier: 0.35
+      venom-damage: 0.0
+      lifesteal-amount: 0.0
+    venom:
+      enabled: true
+      ingredient: SPIDER_EYE
+      health-multiplier-bonus: 0.0
+      damage-multiplier-bonus: 0.12
+      speed-multiplier-bonus: 0.0
+      range-multiplier-bonus: 0.0
+      cooldown-multiplier: 1.0
+      splash-radius: 0.0
+      splash-damage-multiplier: 0.0
+      venom-damage: 0.35
+      lifesteal-amount: 0.0
+    lifesteal:
+      enabled: true
+      ingredient: GHAST_TEAR
+      health-multiplier-bonus: 0.0
+      damage-multiplier-bonus: 0.0
+      speed-multiplier-bonus: 0.0
+      range-multiplier-bonus: 0.0
+      cooldown-multiplier: 1.08
+      splash-radius: 0.0
+      splash-damage-multiplier: 0.0
+      venom-damage: 0.0
+      lifesteal-amount: 0.65
 
   attacks:
     quick:

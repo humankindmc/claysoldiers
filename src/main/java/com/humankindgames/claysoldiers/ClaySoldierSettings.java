@@ -25,6 +25,19 @@ public record ClaySoldierSettings(
         int nameplateHealthBarSegments,
         double nameplateHealthyThreshold,
         double nameplateLowThreshold,
+        String nameplateBarPrefix,
+        String nameplateBarSuffix,
+        String nameplateBarFilledSymbol,
+        String nameplateBarLostSymbol,
+        String nameplateBarEmptySymbol,
+        String nameplateBarHealthyColor,
+        String nameplateBarInjuredColor,
+        String nameplateBarLowColor,
+        String nameplateBarLostColor,
+        String nameplateBarBracketColor,
+        boolean craftingEnabled,
+        boolean teamRecoloringEnabled,
+        Map<ClaySoldierRole, Material> roleUpgradeIngredients,
         boolean useFormations,
         int formationColumns,
         double formationLateralSpacing,
@@ -81,6 +94,7 @@ public record ClaySoldierSettings(
         double runLegSwing,
         double runBodySway,
         Map<ClaySoldierRole, RoleTuning> roles,
+        Map<ClaySoldierModifier, ModifierTuning> modifiers,
         Map<String, AttackTuning> attacks
 ) {
     public static ClaySoldierSettings from(FileConfiguration config) {
@@ -92,6 +106,17 @@ public record ClaySoldierSettings(
 
         Map<String, AttackTuning> attacks = new HashMap<>();
         defaultAttacks().forEach((key, tuning) -> attacks.put(key, AttackTuning.from(config, base + "attacks." + key + ".", tuning)));
+
+        Map<ClaySoldierModifier, ModifierTuning> modifiers = new HashMap<>();
+        for( ClaySoldierModifier modifier : ClaySoldierModifier.values() ) {
+            modifiers.put(modifier, ModifierTuning.from(config, base + "modifiers." + modifier.key() + ".", modifier));
+        }
+
+        Map<ClaySoldierRole, Material> roleUpgradeIngredients = new HashMap<>();
+        putMaterial(roleUpgradeIngredients, ClaySoldierRole.GUARD, parseMaterial(config.getString(base + "crafting.role-upgrades.guard"), Material.IRON_INGOT));
+        putMaterial(roleUpgradeIngredients, ClaySoldierRole.SPEARMAN, parseMaterial(config.getString(base + "crafting.role-upgrades.spearman"), Material.BAMBOO));
+        putMaterial(roleUpgradeIngredients, ClaySoldierRole.SKIRMISHER, parseMaterial(config.getString(base + "crafting.role-upgrades.skirmisher"), Material.FEATHER));
+        putMaterial(roleUpgradeIngredients, ClaySoldierRole.SLINGER, parseMaterial(config.getString(base + "crafting.role-upgrades.slinger"), Material.SNOWBALL));
 
         return new ClaySoldierSettings(
                 config.getDouble(base + "max-health", 20.0D),
@@ -111,6 +136,19 @@ public record ClaySoldierSettings(
                 clamp(config.getInt(base + "nameplates.health-bar-segments", 10), 1, 40),
                 config.getDouble(base + "nameplates.healthy-threshold", 0.60D),
                 config.getDouble(base + "nameplates.low-threshold", 0.30D),
+                config.getString(base + "nameplates.health-bar.prefix", "["),
+                config.getString(base + "nameplates.health-bar.suffix", "]"),
+                config.getString(base + "nameplates.health-bar.filled-symbol", "|"),
+                config.getString(base + "nameplates.health-bar.lost-symbol", "|"),
+                config.getString(base + "nameplates.health-bar.empty-symbol", "-"),
+                config.getString(base + "nameplates.health-bar.healthy-color", "green"),
+                config.getString(base + "nameplates.health-bar.injured-color", "yellow"),
+                config.getString(base + "nameplates.health-bar.low-color", "red"),
+                config.getString(base + "nameplates.health-bar.lost-color", "red"),
+                config.getString(base + "nameplates.health-bar.bracket-color", "dark_gray"),
+                config.getBoolean(base + "crafting.enabled", true),
+                config.getBoolean(base + "crafting.team-recoloring-enabled", true),
+                Map.copyOf(roleUpgradeIngredients),
                 config.getBoolean(base + "formations.enabled", true),
                 clamp(config.getInt(base + "formations.columns", 5), 1, 15),
                 config.getDouble(base + "formations.lateral-spacing", 0.50D),
@@ -167,6 +205,7 @@ public record ClaySoldierSettings(
                 config.getDouble(base + "animations.run-leg-swing", 0.45D),
                 config.getDouble(base + "animations.run-body-sway", 0.06D),
                 Map.copyOf(roles),
+                Map.copyOf(modifiers),
                 Map.copyOf(attacks)
         );
     }
@@ -177,6 +216,14 @@ public record ClaySoldierSettings(
 
     public AttackTuning attack(String key) {
         return this.attacks.getOrDefault(key.toLowerCase(Locale.ROOT), defaultAttacks().getOrDefault(key, AttackTuning.quick()));
+    }
+
+    public ModifierTuning modifier(ClaySoldierModifier modifier) {
+        return this.modifiers.getOrDefault(modifier, ModifierTuning.fromModifier(modifier));
+    }
+
+    public Material roleUpgradeIngredient(ClaySoldierRole role) {
+        return this.roleUpgradeIngredients.get(role);
     }
 
     public int flankDurationRange() {
@@ -200,6 +247,21 @@ public record ClaySoldierSettings(
 
     private static int clamp(int value, int min, int max) {
         return Math.max(min, Math.min(max, value));
+    }
+
+    private static Material parseMaterial(String configured, Material fallback) {
+        if( configured == null || configured.isBlank() || configured.equalsIgnoreCase("none") ) {
+            return configured != null && configured.equalsIgnoreCase("none") ? null : fallback;
+        }
+
+        Material material = Material.matchMaterial(configured);
+        return material == null ? fallback : material;
+    }
+
+    private static void putMaterial(Map<ClaySoldierRole, Material> materials, ClaySoldierRole role, Material material) {
+        if( material != null ) {
+            materials.put(role, material);
+        }
     }
 
     public record RoleTuning(
@@ -230,8 +292,8 @@ public record ClaySoldierSettings(
                     config.getDouble(path + "dodge-chance", defaults.dodgeChance),
                     config.getDouble(path + "flank-chance", defaults.flankChance),
                     config.getDouble(path + "formation-depth", defaults.formationDepth),
-                    parseMaterial(config.getString(path + "main-hand"), defaults.mainHand),
-                    parseMaterial(config.getString(path + "off-hand"), defaults.offHand)
+                    ClaySoldierSettings.parseMaterial(config.getString(path + "main-hand"), defaults.mainHand),
+                    ClaySoldierSettings.parseMaterial(config.getString(path + "off-hand"), defaults.offHand)
             );
         }
 
@@ -240,13 +302,53 @@ public record ClaySoldierSettings(
                     role.dodgeChance(), role.flankChance(), role.formationDepth(), role.mainHand(), role.offHand());
         }
 
-        private static Material parseMaterial(String configured, Material fallback) {
-            if( configured == null || configured.isBlank() || configured.equalsIgnoreCase("none") ) {
-                return configured != null && configured.equalsIgnoreCase("none") ? null : fallback;
+    }
+
+    public record ModifierTuning(
+            boolean enabled,
+            Material ingredient,
+            double healthMultiplierBonus,
+            double damageMultiplierBonus,
+            double speedMultiplierBonus,
+            double rangeMultiplierBonus,
+            double cooldownMultiplier,
+            double splashRadius,
+            double splashDamageMultiplier,
+            double venomDamage,
+            double lifestealAmount
+    ) {
+        private static ModifierTuning from(FileConfiguration config, String path, ClaySoldierModifier modifier) {
+            ModifierTuning defaults = fromModifier(modifier);
+            ConfigurationSection section = config.getConfigurationSection(path.substring(0, path.length() - 1));
+            if( section == null ) {
+                return defaults;
             }
 
-            Material material = Material.matchMaterial(configured);
-            return material == null ? fallback : material;
+            return new ModifierTuning(
+                    config.getBoolean(path + "enabled", defaults.enabled),
+                    ClaySoldierSettings.parseMaterial(config.getString(path + "ingredient"), defaults.ingredient),
+                    config.getDouble(path + "health-multiplier-bonus", defaults.healthMultiplierBonus),
+                    config.getDouble(path + "damage-multiplier-bonus", defaults.damageMultiplierBonus),
+                    config.getDouble(path + "speed-multiplier-bonus", defaults.speedMultiplierBonus),
+                    config.getDouble(path + "range-multiplier-bonus", defaults.rangeMultiplierBonus),
+                    config.getDouble(path + "cooldown-multiplier", defaults.cooldownMultiplier),
+                    config.getDouble(path + "splash-radius", defaults.splashRadius),
+                    config.getDouble(path + "splash-damage-multiplier", defaults.splashDamageMultiplier),
+                    config.getDouble(path + "venom-damage", defaults.venomDamage),
+                    config.getDouble(path + "lifesteal-amount", defaults.lifestealAmount)
+            );
+        }
+
+        private static ModifierTuning fromModifier(ClaySoldierModifier modifier) {
+            return switch( modifier ) {
+                case REINFORCED -> new ModifierTuning(true, modifier.defaultIngredient(), 0.25D, 0.0D, 0.0D, 0.0D, 1.0D, 0.0D, 0.0D, 0.0D, 0.0D);
+                case SWIFT -> new ModifierTuning(true, modifier.defaultIngredient(), 0.0D, 0.0D, 0.25D, 0.0D, 0.86D, 0.0D, 0.0D, 0.0D, 0.0D);
+                case FIERCE -> new ModifierTuning(true, modifier.defaultIngredient(), 0.0D, 0.25D, 0.0D, 0.0D, 1.0D, 0.0D, 0.0D, 0.0D, 0.0D);
+                case LONGSHOT -> new ModifierTuning(true, modifier.defaultIngredient(), 0.0D, 0.0D, 0.0D, 0.35D, 1.0D, 0.0D, 0.0D, 0.0D, 0.0D);
+                case EXPLOSIVE -> new ModifierTuning(true, modifier.defaultIngredient(), 0.0D, 0.0D, 0.0D, 0.0D, 1.12D, 1.15D, 0.35D, 0.0D, 0.0D);
+                case VENOM -> new ModifierTuning(true, modifier.defaultIngredient(), 0.0D, 0.12D, 0.0D, 0.0D, 1.0D, 0.0D, 0.0D, 0.35D, 0.0D);
+                case LIFESTEAL -> new ModifierTuning(true, modifier.defaultIngredient(), 0.0D, 0.0D, 0.0D, 0.0D, 1.08D, 0.0D, 0.0D, 0.0D, 0.65D);
+            };
         }
     }
 

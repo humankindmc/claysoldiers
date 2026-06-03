@@ -40,6 +40,7 @@ public final class ClaySoldierService {
     private final NamespacedKey entityTypeKey;
     private final NamespacedKey teamKey;
     private final NamespacedKey roleKey;
+    private final NamespacedKey modifiersKey;
     private final NamespacedKey healthKey;
     private final Set<UUID> activeSoldiers = new HashSet<>();
     private final Map<UUID, SoldierBrain> brains = new HashMap<>();
@@ -53,6 +54,7 @@ public final class ClaySoldierService {
         this.entityTypeKey = new NamespacedKey(plugin, "clay_entity_type");
         this.teamKey = new NamespacedKey(plugin, "clay_team");
         this.roleKey = new NamespacedKey(plugin, "clay_role");
+        this.modifiersKey = new NamespacedKey(plugin, "clay_modifiers");
         this.healthKey = new NamespacedKey(plugin, "clay_health");
     }
 
@@ -140,9 +142,13 @@ public final class ClaySoldierService {
     }
 
     public List<ArmorStand> spawnSoldiers(ClayTeam team, ClaySoldierRole role, Location baseLocation, int count) {
+        return spawnSoldiers(team, role, baseLocation, count, Set.of());
+    }
+
+    public List<ArmorStand> spawnSoldiers(ClayTeam team, ClaySoldierRole role, Location baseLocation, int count, Set<ClaySoldierModifier> modifiers) {
         int boundedCount = Math.max(1, Math.min(this.settings.maxSpawnPerUse(), count));
         return java.util.stream.IntStream.range(0, boundedCount)
-                .mapToObj(i -> spawnSoldier(team, role, randomizedSpawn(baseLocation)))
+                .mapToObj(i -> spawnSoldier(team, role, randomizedSpawn(baseLocation), modifiers))
                 .toList();
     }
 
@@ -151,6 +157,10 @@ public final class ClaySoldierService {
     }
 
     public ArmorStand spawnSoldier(ClayTeam team, ClaySoldierRole role, Location location) {
+        return spawnSoldier(team, role, location, Set.of());
+    }
+
+    public ArmorStand spawnSoldier(ClayTeam team, ClaySoldierRole role, Location location, Set<ClaySoldierModifier> modifiers) {
         World world = location.getWorld();
         if( world == null ) {
             throw new IllegalArgumentException("Cannot spawn a clay soldier without a world");
@@ -161,7 +171,7 @@ public final class ClaySoldierService {
         }
 
         ArmorStand stand = world.spawn(location, ArmorStand.class);
-        configureSoldier(stand, team, role);
+        configureSoldier(stand, team, role, modifiers);
         this.activeSoldiers.add(stand.getUniqueId());
         this.brains.put(stand.getUniqueId(), new SoldierBrain());
         playSound(stand.getLocation(), Sound.BLOCK_GRAVEL_BREAK, 1.0F, 1.0F + this.random.nextFloat() * this.settings.soundPitchJitter());
@@ -228,7 +238,7 @@ public final class ClaySoldierService {
         return removed;
     }
 
-    private void configureSoldier(ArmorStand stand, ClayTeam team, ClaySoldierRole role) {
+    private void configureSoldier(ArmorStand stand, ClayTeam team, ClaySoldierRole role, Set<ClaySoldierModifier> modifiers) {
         stand.setSmall(true);
         stand.setArms(true);
         stand.setBasePlate(false);
@@ -241,8 +251,9 @@ public final class ClaySoldierService {
         data.set(this.entityTypeKey, PersistentDataType.STRING, SOLDIER_ENTITY_TYPE);
         data.set(this.teamKey, PersistentDataType.STRING, team.key());
         data.set(this.roleKey, PersistentDataType.STRING, role.key());
+        data.set(this.modifiersKey, PersistentDataType.STRING, serializeModifiers(modifiers));
         ClaySoldierSettings.RoleTuning roleTuning = this.settings.role(role);
-        data.set(this.healthKey, PersistentDataType.DOUBLE, maxHealth(role));
+        data.set(this.healthKey, PersistentDataType.DOUBLE, maxHealth(role, modifiers));
         updateNameplate(stand);
 
         EntityEquipment equipment = stand.getEquipment();
@@ -314,7 +325,7 @@ public final class ClaySoldierService {
         }
 
         ArmorStand nearest = null;
-        double searchRange = Math.max(this.settings.followRange(), attackRange(role) + this.settings.targetSearchExtraRange());
+        double searchRange = Math.max(this.settings.followRange(), attackRange(soldier, role) + this.settings.targetSearchExtraRange());
         double nearestDistanceSquared = searchRange * searchRange;
 
         for( UUID id : this.activeSoldiers ) {
@@ -340,7 +351,7 @@ public final class ClaySoldierService {
 
     private void engage(ArmorStand soldier, ArmorStand target, SoldierBrain brain, ClaySoldierRole role) {
         double distanceSquared = soldier.getLocation().distanceSquared(target.getLocation());
-        double attackRange = attackRange(role);
+        double attackRange = attackRange(soldier, role);
         ClaySoldierSettings.RoleTuning roleTuning = this.settings.role(role);
         face(soldier, target.getLocation());
 
@@ -356,7 +367,7 @@ public final class ClaySoldierService {
         Location goal = brain.flankTicks > 0
                 ? flankPosition(soldier, target, brain)
                 : formationPosition(soldier, target, role);
-        double step = this.settings.moveStep() * roleTuning.speedMultiplier();
+        double step = this.settings.moveStep() * speedMultiplier(soldier, roleTuning);
 
         if( distanceSquared < (attackRange + 0.8D) * (attackRange + 0.8D) && role != ClaySoldierRole.GUARD ) {
             step *= this.settings.closeCombatStepMultiplier();
@@ -375,10 +386,11 @@ public final class ClaySoldierService {
     private void queueAttack(ArmorStand soldier, ArmorStand target, SoldierBrain brain, ClaySoldierRole role, double distance) {
         AttackStyle style = chooseAttackStyle(soldier, target, role, distance);
         ClaySoldierSettings.AttackTuning tuning = this.settings.attack(style.key);
+        int cooldownTicks = (int) Math.round((this.settings.attackCooldownTicks() + tuning.extraCooldownTicks()) * cooldownMultiplier(soldier));
         brain.queuedAttack = style;
         brain.queuedTargetId = target.getUniqueId();
         brain.windupTicks = tuning.windupTicks();
-        brain.attackCooldownTicks = this.settings.attackCooldownTicks() + tuning.extraCooldownTicks();
+        brain.attackCooldownTicks = Math.max(this.settings.tickPeriodTicks(), cooldownTicks);
         brain.animation = style.animation;
         brain.animationTicks = tuning.windupTicks() + 8;
 
@@ -417,12 +429,12 @@ public final class ClaySoldierService {
         AttackStyle style = brain.queuedAttack == null ? AttackStyle.QUICK : brain.queuedAttack;
         ClaySoldierSettings.AttackTuning attackTuning = this.settings.attack(style.key);
         ClaySoldierSettings.RoleTuning roleTuning = this.settings.role(role);
-        double maxRange = attackRange(role) + attackTuning.rangeBonus();
+        double maxRange = attackRange(soldier, role) + attackTuning.rangeBonus();
         if( soldier.getLocation().distanceSquared(target.getLocation()) > maxRange * maxRange ) {
             return;
         }
 
-        double damage = this.settings.attackDamage() * roleTuning.damageMultiplier() * attackTuning.damageMultiplier();
+        double damage = this.settings.attackDamage() * damageMultiplier(soldier, roleTuning) * attackTuning.damageMultiplier();
         soldier.swingMainHand();
 
         switch( style ) {
@@ -456,6 +468,8 @@ public final class ClaySoldierService {
                 playSound(target.getLocation(), Sound.ENTITY_PLAYER_ATTACK_WEAK, 0.55F, style == AttackStyle.POKE ? 1.75F : 1.45F);
             }
         }
+
+        applyAttackModifiers(soldier, target, damage);
     }
 
     private void wander(ArmorStand soldier, SoldierBrain brain, ClaySoldierRole role) {
@@ -465,7 +479,7 @@ public final class ClaySoldierService {
 
         double angle = this.random.nextDouble() * Math.PI * 2.0D;
         Location target = soldier.getLocation().clone().add(Math.cos(angle), 0.0D, Math.sin(angle));
-        if( moveToward(soldier, target, this.settings.moveStep() * this.settings.role(role).speedMultiplier() * this.settings.wanderStepMultiplier()) ) {
+        if( moveToward(soldier, target, this.settings.moveStep() * speedMultiplier(soldier, this.settings.role(role)) * this.settings.wanderStepMultiplier()) ) {
             brain.movedThisTick = true;
             maybeHop(soldier, this.settings.idleJumpChance());
             brain.animation = AnimationState.RUN;
@@ -506,7 +520,7 @@ public final class ClaySoldierService {
         int column = slot % columns - center;
         int row = slot / columns;
         ClaySoldierSettings.RoleTuning roleTuning = this.settings.role(role);
-        double distance = Math.max(0.65D, attackRange(role) * this.settings.formationBaseDistanceMultiplier()
+        double distance = Math.max(0.65D, attackRange(soldier, role) * this.settings.formationBaseDistanceMultiplier()
                 + roleTuning.formationDepth() + row * this.settings.formationRowSpacing());
 
         if( role == ClaySoldierRole.SKIRMISHER ) {
@@ -575,6 +589,54 @@ public final class ClaySoldierService {
             spawnParticle(Particle.ITEM, start.clone().add(step.clone().multiply(i)), scaledCount(1), 0.01D, 0.01D, 0.01D, 0.0D,
                     new ItemStack(Material.CLAY_BALL));
         }
+    }
+
+    private void applyAttackModifiers(ArmorStand soldier, ArmorStand target, double baseDamage) {
+        Set<ClaySoldierModifier> modifiers = getModifiers(soldier);
+        if( modifiers.isEmpty() ) {
+            return;
+        }
+
+        if( modifiers.contains(ClaySoldierModifier.EXPLOSIVE) ) {
+            ClaySoldierSettings.ModifierTuning tuning = this.settings.modifier(ClaySoldierModifier.EXPLOSIVE);
+            if( tuning.splashRadius() > 0.0D && tuning.splashDamageMultiplier() > 0.0D ) {
+                ClayTeam friendlyTeam = getTeam(soldier).orElse(ClayTeam.CLAY);
+                for( ArmorStand enemy : nearbyEnemySoldiers(target, friendlyTeam, tuning.splashRadius()) ) {
+                    if( !enemy.equals(target) ) {
+                        damageSoldier(enemy, baseDamage * tuning.splashDamageMultiplier(), soldier);
+                    }
+                }
+                spawnParticle(Particle.EXPLOSION, target.getLocation().clone().add(0.0D, 0.45D, 0.0D), scaledCount(1));
+                playSound(target.getLocation(), Sound.ENTITY_GENERIC_EXPLODE, 0.35F, 1.8F);
+            }
+        }
+
+        if( modifiers.contains(ClaySoldierModifier.VENOM) && !target.isDead() && isSoldier(target) ) {
+            double venomDamage = this.settings.modifier(ClaySoldierModifier.VENOM).venomDamage();
+            if( venomDamage > 0.0D ) {
+                damageSoldier(target, venomDamage, soldier);
+                spawnParticle(Particle.DUST, target.getLocation().clone().add(0.0D, 0.55D, 0.0D), scaledCount(4), 0.08D, 0.08D, 0.08D,
+                        new Particle.DustOptions(org.bukkit.Color.fromRGB(0x2E7D32), 0.7F));
+            }
+        }
+
+        if( modifiers.contains(ClaySoldierModifier.LIFESTEAL) ) {
+            double lifesteal = this.settings.modifier(ClaySoldierModifier.LIFESTEAL).lifestealAmount();
+            if( lifesteal > 0.0D ) {
+                healSoldier(soldier, lifesteal);
+                spawnParticle(Particle.HEART, soldier.getLocation().clone().add(0.0D, 0.75D, 0.0D), scaledCount(1), 0.04D, 0.04D, 0.04D, 0.0D);
+            }
+        }
+    }
+
+    private void healSoldier(ArmorStand soldier, double amount) {
+        if( amount <= 0.0D || !isSoldier(soldier) || soldier.isDead() ) {
+            return;
+        }
+
+        double health = Math.min(maxHealth(soldier), getHealth(soldier) + amount);
+        soldier.getPersistentDataContainer().set(this.healthKey, PersistentDataType.DOUBLE, health);
+        updateNameplate(soldier);
     }
 
     private int nearbyEnemies(ArmorStand center, ClayTeam friendlyTeam, double radius) {
@@ -677,8 +739,44 @@ public final class ClaySoldierService {
         soldier.teleport(current);
     }
 
-    private double attackRange(ClaySoldierRole role) {
-        return this.settings.attackRange() * this.settings.role(role).rangeMultiplier();
+    private double attackRange(ArmorStand soldier, ClaySoldierRole role) {
+        return this.settings.attackRange() * rangeMultiplier(soldier, this.settings.role(role));
+    }
+
+    private double healthMultiplier(ArmorStand soldier, ClaySoldierSettings.RoleTuning roleTuning) {
+        return roleTuning.healthMultiplier() + getModifiers(soldier).stream()
+                .map(this.settings::modifier)
+                .mapToDouble(ClaySoldierSettings.ModifierTuning::healthMultiplierBonus)
+                .sum();
+    }
+
+    private double damageMultiplier(ArmorStand soldier, ClaySoldierSettings.RoleTuning roleTuning) {
+        return roleTuning.damageMultiplier() + getModifiers(soldier).stream()
+                .map(this.settings::modifier)
+                .mapToDouble(ClaySoldierSettings.ModifierTuning::damageMultiplierBonus)
+                .sum();
+    }
+
+    private double speedMultiplier(ArmorStand soldier, ClaySoldierSettings.RoleTuning roleTuning) {
+        return roleTuning.speedMultiplier() + getModifiers(soldier).stream()
+                .map(this.settings::modifier)
+                .mapToDouble(ClaySoldierSettings.ModifierTuning::speedMultiplierBonus)
+                .sum();
+    }
+
+    private double rangeMultiplier(ArmorStand soldier, ClaySoldierSettings.RoleTuning roleTuning) {
+        return roleTuning.rangeMultiplier() + getModifiers(soldier).stream()
+                .map(this.settings::modifier)
+                .mapToDouble(ClaySoldierSettings.ModifierTuning::rangeMultiplierBonus)
+                .sum();
+    }
+
+    private double cooldownMultiplier(ArmorStand soldier) {
+        return getModifiers(soldier).stream()
+                .map(this.settings::modifier)
+                .mapToDouble(ClaySoldierSettings.ModifierTuning::cooldownMultiplier)
+                .filter(value -> value > 0.0D)
+                .reduce(1.0D, (left, right) -> left * right);
     }
 
     private Vector horizontalDirection(Location from, Location to) {
@@ -698,11 +796,43 @@ public final class ClaySoldierService {
 
     private double getHealth(ArmorStand soldier) {
         Double health = soldier.getPersistentDataContainer().get(this.healthKey, PersistentDataType.DOUBLE);
-        return health == null ? maxHealth(getRole(soldier)) : health;
+        return health == null ? maxHealth(soldier) : health;
     }
 
-    private double maxHealth(ClaySoldierRole role) {
-        return this.settings.maxHealth() * this.settings.role(role).healthMultiplier();
+    private double maxHealth(ArmorStand soldier) {
+        return maxHealth(getRole(soldier), getModifiers(soldier));
+    }
+
+    private double maxHealth(ClaySoldierRole role, Set<ClaySoldierModifier> modifiers) {
+        double modifierBonus = modifiers.stream()
+                .map(this.settings::modifier)
+                .mapToDouble(ClaySoldierSettings.ModifierTuning::healthMultiplierBonus)
+                .sum();
+        return this.settings.maxHealth() * (this.settings.role(role).healthMultiplier() + modifierBonus);
+    }
+
+    private Set<ClaySoldierModifier> getModifiers(Entity entity) {
+        if( !isSoldier(entity) ) {
+            return Set.of();
+        }
+
+        String serialized = entity.getPersistentDataContainer().get(this.modifiersKey, PersistentDataType.STRING);
+        if( serialized == null || serialized.isBlank() ) {
+            return Set.of();
+        }
+
+        Set<ClaySoldierModifier> modifiers = new HashSet<>();
+        for( String value : serialized.split(",") ) {
+            ClaySoldierModifier.fromKey(value.trim()).ifPresent(modifiers::add);
+        }
+
+        return Set.copyOf(modifiers);
+    }
+
+    private String serializeModifiers(Set<ClaySoldierModifier> modifiers) {
+        return modifiers.stream()
+                .map(ClaySoldierModifier::key)
+                .collect(java.util.stream.Collectors.joining(","));
     }
 
     private void updateNameplate(ArmorStand soldier) {
@@ -713,7 +843,7 @@ public final class ClaySoldierService {
 
         Optional<ClayTeam> team = getTeam(soldier);
         ClaySoldierRole role = getRole(soldier);
-        double maxHealth = Math.max(1.0D, maxHealth(role));
+        double maxHealth = Math.max(1.0D, maxHealth(soldier));
         double health = Math.max(0.0D, Math.min(maxHealth, getHealth(soldier)));
 
         Component nameplate = Component.empty();
@@ -751,24 +881,42 @@ public final class ClaySoldierService {
         int segments = this.settings.nameplateHealthBarSegments();
         double ratio = Math.max(0.0D, Math.min(1.0D, health / maxHealth));
         int filledSegments = Math.max(0, Math.min(segments, (int) Math.round(ratio * segments)));
-        int emptySegments = segments - filledSegments;
+        int lostSegments = segments - filledSegments;
 
-        return Component.text("[", NamedTextColor.DARK_GRAY)
-                .append(Component.text("|".repeat(filledSegments), healthColor(ratio)))
-                .append(Component.text("|".repeat(emptySegments), NamedTextColor.RED))
-                .append(Component.text("]", NamedTextColor.DARK_GRAY));
+        return Component.text(this.settings.nameplateBarPrefix(), namedColor(this.settings.nameplateBarBracketColor(), NamedTextColor.DARK_GRAY))
+                .append(Component.text(repeatSymbol(this.settings.nameplateBarFilledSymbol(), filledSegments), healthColor(ratio)))
+                .append(Component.text(repeatSymbol(this.settings.nameplateBarLostSymbol(), lostSegments), namedColor(this.settings.nameplateBarLostColor(), NamedTextColor.RED)))
+                .append(Component.text(this.settings.nameplateBarSuffix(), namedColor(this.settings.nameplateBarBracketColor(), NamedTextColor.DARK_GRAY)));
     }
 
     private NamedTextColor healthColor(double ratio) {
         if( ratio <= this.settings.nameplateLowThreshold() ) {
-            return NamedTextColor.RED;
+            return namedColor(this.settings.nameplateBarLowColor(), NamedTextColor.RED);
         }
 
         if( ratio < this.settings.nameplateHealthyThreshold() ) {
-            return NamedTextColor.YELLOW;
+            return namedColor(this.settings.nameplateBarInjuredColor(), NamedTextColor.YELLOW);
         }
 
-        return NamedTextColor.GREEN;
+        return namedColor(this.settings.nameplateBarHealthyColor(), NamedTextColor.GREEN);
+    }
+
+    private NamedTextColor namedColor(String configured, NamedTextColor fallback) {
+        if( configured == null || configured.isBlank() ) {
+            return fallback;
+        }
+
+        NamedTextColor color = NamedTextColor.NAMES.value(configured.toLowerCase(Locale.ROOT));
+        return color == null ? fallback : color;
+    }
+
+    private String repeatSymbol(String symbol, int count) {
+        if( count <= 0 ) {
+            return "";
+        }
+
+        String safeSymbol = symbol == null || symbol.isEmpty() ? "|" : symbol;
+        return safeSymbol.repeat(count);
     }
 
     private String formatHealth(double value) {
@@ -793,7 +941,7 @@ public final class ClaySoldierService {
                 new Particle.DustOptions(value.armorColor(), 0.8F)));
 
         if( this.settings.dropDollOnDeath() ) {
-            team.ifPresent(value -> world.dropItemNaturally(location, this.items.createSoldierDoll(value, role, 1)));
+            team.ifPresent(value -> world.dropItemNaturally(location, this.items.createSoldierDoll(value, role, 1, getModifiers(soldier))));
         }
 
         removeSoldier(soldier);

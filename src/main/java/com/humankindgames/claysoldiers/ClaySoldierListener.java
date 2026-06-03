@@ -16,6 +16,7 @@ import org.bukkit.event.block.Action;
 import org.bukkit.event.entity.EntityDamageByEntityEvent;
 import org.bukkit.event.entity.EntityDamageEvent;
 import org.bukkit.event.inventory.InventoryCreativeEvent;
+import org.bukkit.event.inventory.PrepareItemCraftEvent;
 import org.bukkit.event.player.PlayerArmorStandManipulateEvent;
 import org.bukkit.event.player.PlayerInteractAtEntityEvent;
 import org.bukkit.event.player.PlayerInteractEvent;
@@ -26,16 +27,16 @@ import org.bukkit.util.Vector;
 
 public final class ClaySoldierListener
         implements Listener {
-    private static final String SPAWN_FAILURE_MESSAGE = "Clay soldier spawn failed. Check the server console for the stack trace.";
-
     private final ClaySoldierItems items;
     private final ClaySoldierService soldiers;
     private final ClaySoldierSettings settings;
+    private final ClaySoldierMessages messages;
 
-    public ClaySoldierListener(ClaySoldierItems items, ClaySoldierService soldiers, ClaySoldierSettings settings) {
+    public ClaySoldierListener(ClaySoldierItems items, ClaySoldierService soldiers, ClaySoldierSettings settings, ClaySoldierMessages messages) {
         this.items = items;
         this.soldiers = soldiers;
         this.settings = settings;
+        this.messages = messages;
     }
 
     @EventHandler(priority = EventPriority.HIGH)
@@ -63,10 +64,10 @@ public final class ClaySoldierListener
         ClaySoldierRole role = this.items.getDollRole(item);
 
         try {
-            this.soldiers.spawnSoldiers(team.get(), role, spawnLocation.get(), spawnCount);
+            this.soldiers.spawnSoldiers(team.get(), role, spawnLocation.get(), spawnCount, this.items.getDollModifiers(item));
         } catch( RuntimeException ex ) {
-            player.sendMessage(SPAWN_FAILURE_MESSAGE);
-            this.soldiers.plugin().getLogger().log(Level.SEVERE, "Failed to spawn clay soldier from doll", ex);
+            player.sendMessage(this.messages.component("commands.spawn-failure-player"));
+            this.soldiers.plugin().getLogger().log(Level.SEVERE, this.messages.plain("commands.spawn-failure-log-doll"), ex);
             return;
         }
 
@@ -116,6 +117,40 @@ public final class ClaySoldierListener
     public void onCreativeInventory(InventoryCreativeEvent event) {
         if( this.items.isSoldierDoll(event.getCursor()) ) {
             event.getCursor().setAmount(Math.min(event.getCursor().getAmount(), this.settings.dollStackSize()));
+        }
+    }
+
+    @EventHandler
+    public void onPrepareCraft(PrepareItemCraftEvent event) {
+        ItemStack doll = null;
+        ItemStack ingredient = null;
+
+        for( ItemStack item : event.getInventory().getMatrix() ) {
+            if( item == null || item.getType().isAir() ) {
+                continue;
+            }
+
+            if( this.items.isSoldierDoll(item) ) {
+                if( doll != null ) {
+                    event.getInventory().setResult(null);
+                    return;
+                }
+                doll = item;
+                continue;
+            }
+
+            if( ingredient != null ) {
+                event.getInventory().setResult(null);
+                return;
+            }
+            ingredient = item;
+        }
+
+        Optional<ItemStack> result = this.items.createCraftingResult(doll, ingredient);
+        if( result.isPresent() ) {
+            event.getInventory().setResult(result.get());
+        } else if( doll != null ) {
+            event.getInventory().setResult(null);
         }
     }
 
