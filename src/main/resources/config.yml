@@ -1,0 +1,15 @@
+clay-soldiers:
+  # These match the 1.12.2 Clay Soldiers Mod defaults where there is a clear server-side equivalent.
+  max-health: 20.0
+  attack-damage: 1.0
+  follow-range: 16.0
+
+  # Paper plugin approximation values. Armor stands do not have vanilla pathfinding, so movement is simulated.
+  move-step: 0.22
+  attack-range: 0.75
+  attack-cooldown-ticks: 20
+  tick-period-ticks: 5
+
+  doll-stack-size: 16
+  max-spawn-per-use: 64
+  drop-doll-on-death: true
