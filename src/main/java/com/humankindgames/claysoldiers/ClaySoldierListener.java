@@ -1,6 +1,7 @@
 package com.humankindgames.claysoldiers;
 
 import java.util.Optional;
+import java.util.Map;
 import java.util.logging.Level;
 import org.bukkit.GameMode;
 import org.bukkit.Location;
@@ -62,6 +63,10 @@ public final class ClaySoldierListener
         int requestedCount = player.isSneaking() ? 1 : item.getAmount();
         int spawnCount = Math.max(1, Math.min(this.settings.maxSpawnPerUse(), requestedCount));
         ClaySoldierRole role = this.items.getDollRole(item);
+        if( !this.soldiers.canSpawnSoldiers(spawnLocation.get(), spawnCount) ) {
+            sendSpawnLimitMessage(player, spawnLocation.get());
+            return;
+        }
 
         try {
             this.soldiers.spawnSoldiers(team.get(), role, spawnLocation.get(), spawnCount, this.items.getDollModifiers(item));
@@ -85,6 +90,7 @@ public final class ClaySoldierListener
 
         event.setCancelled(true);
         if( !(event instanceof EntityDamageByEntityEvent damageByEntity) ) {
+            environmentalDamage(event).ifPresent(damage -> this.soldiers.damageSoldier(soldier, damage));
             return;
         }
 
@@ -97,6 +103,15 @@ public final class ClaySoldierListener
         }
 
         this.soldiers.damageSoldier(soldier, damage, attacker);
+    }
+
+    private Optional<Double> environmentalDamage(EntityDamageEvent event) {
+        return switch( event.getCause() ) {
+            case FIRE, FIRE_TICK -> Optional.of(this.settings.fireDamage());
+            case LAVA -> Optional.of(this.settings.lavaDamage());
+            case HOT_FLOOR -> Optional.of(this.settings.hotFloorDamage());
+            default -> Optional.empty();
+        };
     }
 
     @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
@@ -200,5 +215,17 @@ public final class ClaySoldierListener
 
         item.setAmount(remaining);
         player.getInventory().setItemInMainHand(item);
+    }
+
+    private void sendSpawnLimitMessage(Player player, Location location) {
+        player.sendMessage(this.messages.component("commands.spawn-limit-reached", Map.of(
+                "limit", Integer.toString(this.settings.spawnLimitMaxSoldiers()),
+                "radius", formatNumber(this.settings.spawnLimitRadius()),
+                "current", Integer.toString(this.soldiers.nearbySoldierCount(location))
+        )));
+    }
+
+    private String formatNumber(double value) {
+        return Math.rint(value) == value ? Long.toString(Math.round(value)) : Double.toString(value);
     }
 }

@@ -17,6 +17,11 @@
   max-spawn-per-use: 64
   drop-doll-on-death: true
 
+  spawn-limits:
+    enabled: true
+    max-soldiers: 32
+    radius: 100.0
+
   nameplates:
     enabled: true
     show-team: true
@@ -77,9 +82,24 @@
     sweep-splash-damage-multiplier: 0.65
     player-damage: 4.0
     creative-player-instant-kill: true
+    fire-damage: 6.0
+    lava-damage: 12.0
+    hot-floor-damage: 4.0
 
   formations:
     enabled: true
+    tactical-enabled: true
+    # Tactical formations activate when at least this many same-team same-role soldiers are nearby.
+    tactical-min-soldiers: 4
+    tactical-scan-range: 8.0
+    tactical-speed-multiplier: 0.82
+    tactical-damage-multiplier: 1.14
+    special-attack-damage-multiplier: 1.35
+    shield-wall-distance: 0.70
+    spear-wall-distance: 1.05
+    support-behind-wall-distance: 1.65
+    flank-protection-width: 1.85
+    combined-wall-chance: 0.65
     columns: 5
     lateral-spacing: 0.50
     row-spacing: 0.34

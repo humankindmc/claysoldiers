@@ -150,6 +150,14 @@ public final class ClaySoldiersCommand
         int amount = options.amount();
         Location location = player.getLocation().clone().add(horizontalDirection(player).multiply(1.8D));
         location.setY(player.getLocation().getY());
+        if( !this.soldiers.canSpawnSoldiers(location, amount) ) {
+            sender.sendMessage(this.messages.component("commands.spawn-limit-reached", Map.of(
+                    "limit", Integer.toString(this.soldiers.spawnLimitMaxSoldiers()),
+                    "radius", formatNumber(this.soldiers.spawnLimitRadius()),
+                    "current", Integer.toString(this.soldiers.nearbySoldierCount(location))
+            )));
+            return;
+        }
 
         try {
             this.soldiers.spawnSoldiers(team.get(), options.role(), location, amount);
@@ -282,6 +290,10 @@ public final class ClaySoldiersCommand
         sender.sendMessage(this.messages.component("commands.help-teams", placeholders));
         sender.sendMessage(this.messages.component("commands.help-roles", placeholders));
         sender.sendMessage(this.messages.component("commands.help-count", placeholders));
+    }
+
+    private String formatNumber(double value) {
+        return Math.rint(value) == value ? Long.toString(Math.round(value)) : Double.toString(value);
     }
 
     private record ParsedOptions(int amount, ClaySoldierRole role, Player target, String error, Map<String, String> errorPlaceholders) {

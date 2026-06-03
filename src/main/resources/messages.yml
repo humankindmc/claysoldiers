@@ -10,6 +10,7 @@
   console-clear-only: '&cOnly players can clear nearby clay soldiers.'
   give-success: '&aGave {amount} {team} {role} doll(s) to {player}.'
   spawn-success: '&aSpawned {amount} {team} {role} soldier(s).'
+  spawn-limit-reached: '&cToo many clay soldiers nearby. Limit: {limit} within {radius} blocks. Current nearby: {current}.'
   clear-success: '&eRemoved {amount} clay soldier(s) within {radius} blocks.'
   teams-header: '&eClay soldier teams:'
   team-line: ' &7- &f{key} &7({team_color}{team}&7)'
