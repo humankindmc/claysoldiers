@@ -606,7 +606,11 @@ public final class ClaySoldierService {
         direction.normalize();
         Location next = current.clone().add(direction.clone().multiply(stepSize));
         next.setDirection(direction);
-        return moveTo(soldier, next);
+        if( moveTo(soldier, next) ) {
+            return true;
+        }
+
+        return tryBlockedMovement(soldier, current, direction, stepSize);
     }
 
     private boolean moveTo(ArmorStand soldier, Location location) {
@@ -616,6 +620,33 @@ public final class ClaySoldierService {
         }
 
         return false;
+    }
+
+    private boolean tryBlockedMovement(ArmorStand soldier, Location current, Vector direction, double stepSize) {
+        Vector firstSide = perpendicular(direction).multiply(this.random.nextBoolean() ? 1.0D : -1.0D);
+        Vector secondSide = firstSide.clone().multiply(-1.0D);
+        Vector reverse = direction.clone().multiply(-1.0D);
+
+        if( tryStep(soldier, current, firstSide, stepSize * 0.75D) ) {
+            return true;
+        }
+
+        if( tryStep(soldier, current, secondSide, stepSize * 0.75D) ) {
+            return true;
+        }
+
+        if( tryStep(soldier, current, reverse, stepSize * 0.60D) ) {
+            return true;
+        }
+
+        faceDirection(soldier, reverse);
+        return false;
+    }
+
+    private boolean tryStep(ArmorStand soldier, Location current, Vector direction, double stepSize) {
+        Location next = current.clone().add(direction.clone().multiply(stepSize));
+        next.setDirection(direction);
+        return moveTo(soldier, next);
     }
 
     private boolean canOccupy(Location location) {
@@ -632,6 +663,16 @@ public final class ClaySoldierService {
             return;
         }
 
+        current.setDirection(direction);
+        soldier.teleport(current);
+    }
+
+    private void faceDirection(ArmorStand soldier, Vector direction) {
+        if( direction.lengthSquared() < MIN_MOVE_DISTANCE_SQUARED ) {
+            return;
+        }
+
+        Location current = soldier.getLocation();
         current.setDirection(direction);
         soldier.teleport(current);
     }
@@ -714,7 +755,7 @@ public final class ClaySoldierService {
 
         return Component.text("[", NamedTextColor.DARK_GRAY)
                 .append(Component.text("|".repeat(filledSegments), healthColor(ratio)))
-                .append(Component.text("-".repeat(emptySegments), NamedTextColor.DARK_GRAY))
+                .append(Component.text("|".repeat(emptySegments), NamedTextColor.RED))
                 .append(Component.text("]", NamedTextColor.DARK_GRAY));
     }
 
