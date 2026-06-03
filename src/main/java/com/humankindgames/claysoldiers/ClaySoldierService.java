@@ -128,7 +128,8 @@ public final class ClaySoldierService {
             return ClaySoldierRole.WARRIOR;
         }
 
-        return ClaySoldierRole.fromKey(roleKeyValue).orElse(ClaySoldierRole.WARRIOR);
+        ClaySoldierRole role = ClaySoldierRole.fromKey(roleKeyValue).orElse(ClaySoldierRole.WARRIOR);
+        return this.settings.role(role).enabled() ? role : ClaySoldierRole.WARRIOR;
     }
 
     public List<ArmorStand> spawnSoldiers(ClayTeam team, Location baseLocation, int count) {
@@ -152,12 +153,16 @@ public final class ClaySoldierService {
             throw new IllegalArgumentException("Cannot spawn a clay soldier without a world");
         }
 
+        if( !this.settings.role(role).enabled() ) {
+            role = ClaySoldierRole.WARRIOR;
+        }
+
         ArmorStand stand = world.spawn(location, ArmorStand.class);
         configureSoldier(stand, team, role);
         this.activeSoldiers.add(stand.getUniqueId());
         this.brains.put(stand.getUniqueId(), new SoldierBrain());
-        world.playSound(stand.getLocation(), Sound.BLOCK_GRAVEL_BREAK, 1.0F, 1.0F + this.random.nextFloat() * 0.2F);
-        world.spawnParticle(Particle.DUST, stand.getLocation().clone().add(0.0D, 0.4D, 0.0D), 8, 0.12D, 0.12D, 0.12D,
+        playSound(stand.getLocation(), Sound.BLOCK_GRAVEL_BREAK, 1.0F, 1.0F + this.random.nextFloat() * this.settings.soundPitchJitter());
+        spawnParticle(Particle.DUST, stand.getLocation().clone().add(0.0D, 0.4D, 0.0D), scaledCount(8), 0.12D, 0.12D, 0.12D,
                 new Particle.DustOptions(team.armorColor(), 0.7F));
         return stand;
     }
@@ -172,7 +177,8 @@ public final class ClaySoldierService {
         }
 
         ClaySoldierRole role = getRole(soldier);
-        if( attacker instanceof ArmorStand attackingSoldier && isSoldier(attackingSoldier) && tryDodge(soldier, attackingSoldier, role) ) {
+        ClaySoldierSettings.RoleTuning roleTuning = this.settings.role(role);
+        if( attacker instanceof ArmorStand attackingSoldier && isSoldier(attackingSoldier) && tryDodge(soldier, attackingSoldier, roleTuning) ) {
             return;
         }
 
@@ -183,14 +189,14 @@ public final class ClaySoldierService {
         }
 
         soldier.getPersistentDataContainer().set(this.healthKey, PersistentDataType.DOUBLE, health);
-        soldier.getWorld().playSound(soldier.getLocation(), Sound.ENTITY_ARMOR_STAND_HIT, 0.55F, 1.25F);
+        playSound(soldier.getLocation(), Sound.ENTITY_ARMOR_STAND_HIT, 0.55F, 1.25F);
         SoldierBrain brain = brain(soldier);
         brain.animation = AnimationState.HIT;
         brain.animationTicks = 8;
 
-        getTeam(soldier).ifPresent(team -> soldier.getWorld().spawnParticle(Particle.DUST,
+        getTeam(soldier).ifPresent(team -> spawnParticle(Particle.DUST,
                 soldier.getLocation().clone().add(0.0D, 0.6D, 0.0D),
-                3,
+                scaledCount(3),
                 0.08D,
                 0.08D,
                 0.08D,
@@ -233,7 +239,8 @@ public final class ClaySoldierService {
         data.set(this.entityTypeKey, PersistentDataType.STRING, SOLDIER_ENTITY_TYPE);
         data.set(this.teamKey, PersistentDataType.STRING, team.key());
         data.set(this.roleKey, PersistentDataType.STRING, role.key());
-        data.set(this.healthKey, PersistentDataType.DOUBLE, this.settings.maxHealth() * role.healthMultiplier());
+        ClaySoldierSettings.RoleTuning roleTuning = this.settings.role(role);
+        data.set(this.healthKey, PersistentDataType.DOUBLE, this.settings.maxHealth() * roleTuning.healthMultiplier());
 
         EntityEquipment equipment = stand.getEquipment();
         if( equipment != null ) {
@@ -241,8 +248,8 @@ public final class ClaySoldierService {
             equipment.setChestplate(this.items.createArmorPiece(Material.LEATHER_CHESTPLATE, team));
             equipment.setLeggings(this.items.createArmorPiece(Material.LEATHER_LEGGINGS, team));
             equipment.setBoots(this.items.createArmorPiece(Material.LEATHER_BOOTS, team));
-            equipment.setItemInMainHand(new ItemStack(role.mainHand()));
-            equipment.setItemInOffHand(role.offHand() == null ? new ItemStack(Material.AIR) : new ItemStack(role.offHand()));
+            equipment.setItemInMainHand(itemFor(roleTuning.mainHand()));
+            equipment.setItemInOffHand(itemFor(roleTuning.offHand()));
         }
     }
 
@@ -304,7 +311,7 @@ public final class ClaySoldierService {
         }
 
         ArmorStand nearest = null;
-        double searchRange = Math.max(this.settings.followRange(), attackRange(role) + 3.0D);
+        double searchRange = Math.max(this.settings.followRange(), attackRange(role) + this.settings.targetSearchExtraRange());
         double nearestDistanceSquared = searchRange * searchRange;
 
         for( UUID id : this.activeSoldiers ) {
@@ -331,6 +338,7 @@ public final class ClaySoldierService {
     private void engage(ArmorStand soldier, ArmorStand target, SoldierBrain brain, ClaySoldierRole role) {
         double distanceSquared = soldier.getLocation().distanceSquared(target.getLocation());
         double attackRange = attackRange(role);
+        ClaySoldierSettings.RoleTuning roleTuning = this.settings.role(role);
         face(soldier, target.getLocation());
 
         if( distanceSquared <= attackRange * attackRange && brain.attackCooldownTicks <= 0 ) {
@@ -338,21 +346,22 @@ public final class ClaySoldierService {
             return;
         }
 
-        if( brain.flankTicks <= 0 && this.random.nextDouble() < role.flankChance() * 0.16D ) {
-            brain.startFlank(this.random);
+        if( this.settings.useFlanking() && brain.flankTicks <= 0 && this.random.nextDouble() < roleTuning.flankChance() * this.settings.flankChanceScale() ) {
+            brain.startFlank(this.random, this.settings);
         }
 
         Location goal = brain.flankTicks > 0
                 ? flankPosition(soldier, target, brain)
                 : formationPosition(soldier, target, role);
-        double step = this.settings.moveStep() * role.speedMultiplier();
+        double step = this.settings.moveStep() * roleTuning.speedMultiplier();
 
         if( distanceSquared < (attackRange + 0.8D) * (attackRange + 0.8D) && role != ClaySoldierRole.GUARD ) {
-            step *= 0.72D;
+            step *= this.settings.closeCombatStepMultiplier();
         }
 
         if( moveToward(soldier, goal, step) ) {
             brain.movedThisTick = true;
+            maybeHop(soldier, this.settings.chaseJumpChance());
             if( brain.animationTicks <= 0 ) {
                 brain.animation = AnimationState.RUN;
                 brain.animationTicks = this.settings.tickPeriodTicks() + 3;
@@ -362,34 +371,39 @@ public final class ClaySoldierService {
 
     private void queueAttack(ArmorStand soldier, ArmorStand target, SoldierBrain brain, ClaySoldierRole role, double distance) {
         AttackStyle style = chooseAttackStyle(soldier, target, role, distance);
+        ClaySoldierSettings.AttackTuning tuning = this.settings.attack(style.key);
         brain.queuedAttack = style;
         brain.queuedTargetId = target.getUniqueId();
-        brain.windupTicks = style.windupTicks;
-        brain.attackCooldownTicks = this.settings.attackCooldownTicks() + style.extraCooldownTicks;
+        brain.windupTicks = tuning.windupTicks();
+        brain.attackCooldownTicks = this.settings.attackCooldownTicks() + tuning.extraCooldownTicks();
         brain.animation = style.animation;
-        brain.animationTicks = style.windupTicks + 8;
+        brain.animationTicks = tuning.windupTicks() + 8;
 
         if( style == AttackStyle.LEAP ) {
             leapToward(soldier, target);
+        } else {
+            maybeHop(soldier, this.settings.attackLeapChance());
         }
 
-        soldier.getWorld().playSound(soldier.getLocation(), style.windupSound, 0.45F, 1.0F + this.random.nextFloat() * 0.25F);
+        playSound(soldier.getLocation(), style.windupSound, 0.45F, 1.0F + this.random.nextFloat() * this.settings.soundPitchJitter());
     }
 
     private AttackStyle chooseAttackStyle(ArmorStand soldier, ArmorStand target, ClaySoldierRole role, double distance) {
-        if( role == ClaySoldierRole.SLINGER ) {
+        if( role == ClaySoldierRole.SLINGER && enabled(AttackStyle.SLING) ) {
             return AttackStyle.SLING;
         }
-        if( role == ClaySoldierRole.SPEARMAN ) {
+        if( role == ClaySoldierRole.SPEARMAN && enabled(AttackStyle.POKE) ) {
             return AttackStyle.POKE;
         }
-        if( role == ClaySoldierRole.GUARD && this.random.nextDouble() < 0.48D ) {
+        if( role == ClaySoldierRole.GUARD && enabled(AttackStyle.SHIELD_BASH) && this.random.nextDouble() < this.settings.guardShieldBashChance() ) {
             return AttackStyle.SHIELD_BASH;
         }
-        if( nearbyEnemies(target, getTeam(soldier).orElse(ClayTeam.CLAY), 1.15D) >= 2 && this.random.nextDouble() < 0.35D ) {
+        if( enabled(AttackStyle.SWEEP) && nearbyEnemies(target, getTeam(soldier).orElse(ClayTeam.CLAY), this.settings.sweepClusterRadius()) >= this.settings.sweepMinEnemies()
+                && this.random.nextDouble() < this.settings.sweepChance() ) {
             return AttackStyle.SWEEP;
         }
-        if( distance > 0.45D && this.random.nextDouble() < (role == ClaySoldierRole.SKIRMISHER ? 0.42D : 0.24D) ) {
+        if( enabled(AttackStyle.LEAP) && distance > this.settings.leapMinDistance()
+                && this.random.nextDouble() < (role == ClaySoldierRole.SKIRMISHER ? this.settings.skirmisherLeapChance() : this.settings.warriorLeapChance()) ) {
             return AttackStyle.LEAP;
         }
 
@@ -398,83 +412,85 @@ public final class ClaySoldierService {
 
     private void performAttack(ArmorStand soldier, ArmorStand target, SoldierBrain brain, ClaySoldierRole role) {
         AttackStyle style = brain.queuedAttack == null ? AttackStyle.QUICK : brain.queuedAttack;
-        double maxRange = attackRange(role) + style.rangeBonus;
+        ClaySoldierSettings.AttackTuning attackTuning = this.settings.attack(style.key);
+        ClaySoldierSettings.RoleTuning roleTuning = this.settings.role(role);
+        double maxRange = attackRange(role) + attackTuning.rangeBonus();
         if( soldier.getLocation().distanceSquared(target.getLocation()) > maxRange * maxRange ) {
             return;
         }
 
-        double damage = this.settings.attackDamage() * role.damageMultiplier() * style.damageMultiplier;
-        World world = soldier.getWorld();
+        double damage = this.settings.attackDamage() * roleTuning.damageMultiplier() * attackTuning.damageMultiplier();
         soldier.swingMainHand();
 
         switch( style ) {
             case SLING -> {
                 drawSlingTrail(soldier, target);
                 damageSoldier(target, damage, soldier);
-                world.playSound(soldier.getLocation(), Sound.ENTITY_SNOWBALL_THROW, 0.7F, 1.35F);
+                playSound(soldier.getLocation(), Sound.ENTITY_SNOWBALL_THROW, 0.7F, 1.35F);
             }
             case SWEEP -> {
                 damageSoldier(target, damage, soldier);
-                for( ArmorStand enemy : nearbyEnemySoldiers(target, getTeam(soldier).orElse(ClayTeam.CLAY), 1.25D) ) {
+                for( ArmorStand enemy : nearbyEnemySoldiers(target, getTeam(soldier).orElse(ClayTeam.CLAY), this.settings.sweepClusterRadius() + 0.10D) ) {
                     if( !enemy.equals(target) ) {
-                        damageSoldier(enemy, damage * 0.65D, soldier);
+                        damageSoldier(enemy, damage * this.settings.sweepSplashDamageMultiplier(), soldier);
                     }
                 }
-                world.spawnParticle(Particle.SWEEP_ATTACK, target.getLocation().clone().add(0.0D, 0.55D, 0.0D), 1);
-                world.playSound(target.getLocation(), Sound.ENTITY_PLAYER_ATTACK_SWEEP, 0.7F, 1.6F);
+                spawnParticle(Particle.SWEEP_ATTACK, target.getLocation().clone().add(0.0D, 0.55D, 0.0D), scaledCount(1));
+                playSound(target.getLocation(), Sound.ENTITY_PLAYER_ATTACK_SWEEP, 0.7F, 1.6F);
             }
             case SHIELD_BASH -> {
                 damageSoldier(target, damage, soldier);
-                pushAway(target, soldier.getLocation(), 0.42D);
-                world.playSound(target.getLocation(), Sound.ITEM_SHIELD_BLOCK, 0.75F, 1.1F);
+                pushAway(target, soldier.getLocation(), this.settings.shieldBashPushDistance());
+                playSound(target.getLocation(), Sound.ITEM_SHIELD_BLOCK, 0.75F, 1.1F);
             }
             case LEAP -> {
                 damageSoldier(target, damage, soldier);
-                world.spawnParticle(Particle.CLOUD, soldier.getLocation(), 4, 0.08D, 0.04D, 0.08D, 0.01D);
-                world.playSound(target.getLocation(), Sound.ENTITY_PLAYER_ATTACK_KNOCKBACK, 0.55F, 1.4F);
+                spawnParticle(Particle.CLOUD, soldier.getLocation(), scaledCount(4), 0.08D, 0.04D, 0.08D, 0.01D);
+                playSound(target.getLocation(), Sound.ENTITY_PLAYER_ATTACK_KNOCKBACK, 0.55F, 1.4F);
             }
             case POKE, QUICK -> {
                 damageSoldier(target, damage, soldier);
-                world.playSound(target.getLocation(), Sound.ENTITY_PLAYER_ATTACK_WEAK, 0.55F, style == AttackStyle.POKE ? 1.75F : 1.45F);
+                playSound(target.getLocation(), Sound.ENTITY_PLAYER_ATTACK_WEAK, 0.55F, style == AttackStyle.POKE ? 1.75F : 1.45F);
             }
         }
     }
 
     private void wander(ArmorStand soldier, SoldierBrain brain, ClaySoldierRole role) {
-        if( this.random.nextInt(role == ClaySoldierRole.SKIRMISHER ? 3 : 5) != 0 ) {
+        if( this.random.nextInt(role == ClaySoldierRole.SKIRMISHER ? this.settings.skirmisherWanderRoll() : this.settings.normalWanderRoll()) != 0 ) {
             return;
         }
 
         double angle = this.random.nextDouble() * Math.PI * 2.0D;
         Location target = soldier.getLocation().clone().add(Math.cos(angle), 0.0D, Math.sin(angle));
-        if( moveToward(soldier, target, this.settings.moveStep() * role.speedMultiplier() * 0.55D) ) {
+        if( moveToward(soldier, target, this.settings.moveStep() * this.settings.role(role).speedMultiplier() * this.settings.wanderStepMultiplier()) ) {
             brain.movedThisTick = true;
+            maybeHop(soldier, this.settings.idleJumpChance());
             brain.animation = AnimationState.RUN;
             brain.animationTicks = this.settings.tickPeriodTicks() + 3;
         }
     }
 
-    private boolean tryDodge(ArmorStand soldier, ArmorStand attacker, ClaySoldierRole role) {
+    private boolean tryDodge(ArmorStand soldier, ArmorStand attacker, ClaySoldierSettings.RoleTuning roleTuning) {
         SoldierBrain brain = brain(soldier);
-        if( brain.dodgeCooldownTicks > 0 || this.random.nextDouble() > role.dodgeChance() ) {
+        if( !this.settings.useDodging() || brain.dodgeCooldownTicks > 0 || this.random.nextDouble() > roleTuning.dodgeChance() ) {
             return false;
         }
 
         Vector away = horizontalDirection(attacker.getLocation(), soldier.getLocation());
         Vector side = perpendicular(away).multiply(this.random.nextBoolean() ? 1.0D : -1.0D);
         Location dodgeLocation = soldier.getLocation().clone()
-                .add(side.multiply(0.52D + this.random.nextDouble() * 0.28D))
-                .add(away.multiply(0.22D));
+                .add(side.multiply(this.settings.dodgeSideDistanceMin() + this.random.nextDouble() * Math.max(0.0D, this.settings.dodgeSideDistanceMax() - this.settings.dodgeSideDistanceMin())))
+                .add(away.multiply(this.settings.dodgeBackDistance()));
 
         if( !moveTo(soldier, dodgeLocation) ) {
             return false;
         }
 
-        brain.dodgeCooldownTicks = 22 + this.random.nextInt(16);
+        brain.dodgeCooldownTicks = this.settings.dodgeCooldownMinTicks() + (this.settings.dodgeCooldownRange() == 0 ? 0 : this.random.nextInt(this.settings.dodgeCooldownRange()));
         brain.animation = AnimationState.DODGE;
         brain.animationTicks = 12;
-        soldier.getWorld().playSound(soldier.getLocation(), Sound.ENTITY_BREEZE_JUMP, 0.35F, 1.7F);
-        soldier.getWorld().spawnParticle(Particle.CLOUD, soldier.getLocation().clone().add(0.0D, 0.2D, 0.0D), 3, 0.08D, 0.03D, 0.08D, 0.01D);
+        playSound(soldier.getLocation(), Sound.ENTITY_BREEZE_JUMP, 0.35F, 1.7F);
+        spawnParticle(Particle.CLOUD, soldier.getLocation().clone().add(0.0D, 0.2D, 0.0D), scaledCount(3), 0.08D, 0.03D, 0.08D, 0.01D);
         return true;
     }
 
@@ -482,20 +498,24 @@ public final class ClaySoldierService {
         Vector away = horizontalDirection(target.getLocation(), soldier.getLocation());
         Vector side = perpendicular(away);
         int slot = formationSlot(soldier, target);
-        int column = slot % 5 - 2;
-        int row = slot / 5;
-        double distance = Math.max(0.65D, attackRange(role) * 0.82D + role.formationDepth() + row * 0.34D);
+        int columns = this.settings.useFormations() ? this.settings.formationColumns() : 1;
+        int center = columns / 2;
+        int column = slot % columns - center;
+        int row = slot / columns;
+        ClaySoldierSettings.RoleTuning roleTuning = this.settings.role(role);
+        double distance = Math.max(0.65D, attackRange(role) * this.settings.formationBaseDistanceMultiplier()
+                + roleTuning.formationDepth() + row * this.settings.formationRowSpacing());
 
         if( role == ClaySoldierRole.SKIRMISHER ) {
             int flankSide = brain(soldier).flankDirection == 0 ? 1 : brain(soldier).flankDirection;
             return target.getLocation().clone()
-                    .add(side.clone().multiply(flankSide * (1.25D + Math.abs(column) * 0.25D)))
-                    .add(away.clone().multiply(0.45D + row * 0.20D));
+                    .add(side.clone().multiply(flankSide * (this.settings.skirmisherFlankWidth() + Math.abs(column) * this.settings.skirmisherFlankColumnSpacing())))
+                    .add(away.clone().multiply(this.settings.flankBackOffset() + row * this.settings.skirmisherFlankRowSpacing()));
         }
 
         return target.getLocation().clone()
                 .add(away.multiply(distance))
-                .add(side.multiply(column * 0.50D));
+                .add(side.multiply(column * this.settings.formationLateralSpacing()));
     }
 
     private int formationSlot(ArmorStand soldier, ArmorStand target) {
@@ -510,7 +530,7 @@ public final class ClaySoldierService {
                 .map(ArmorStand.class::cast)
                 .filter(candidate -> !candidate.isDead() && candidate.getWorld().equals(soldier.getWorld()))
                 .filter(candidate -> getTeam(candidate).orElse(null) == team.get())
-                .filter(candidate -> candidate.getLocation().distanceSquared(target.getLocation()) <= this.settings.followRange() * this.settings.followRange())
+                .filter(candidate -> candidate.getLocation().distanceSquared(target.getLocation()) <= formationRangeSquared())
                 .sorted(Comparator.<ArmorStand>comparingInt(candidate -> getRole(candidate).ordinal()).thenComparing(Entity::getUniqueId))
                 .toList();
 
@@ -522,17 +542,17 @@ public final class ClaySoldierService {
         Vector away = horizontalDirection(target.getLocation(), soldier.getLocation());
         Vector side = perpendicular(away).multiply(brain.flankDirection);
         return target.getLocation().clone()
-                .add(side.multiply(1.35D + this.random.nextDouble() * 0.35D))
-                .add(away.multiply(0.38D));
+                .add(side.multiply(this.settings.flankSideOffset() + this.random.nextDouble() * this.settings.flankSideJitter()))
+                .add(away.multiply(this.settings.flankBackOffset()));
     }
 
     private void leapToward(ArmorStand soldier, ArmorStand target) {
         Vector direction = horizontalDirection(soldier.getLocation(), target.getLocation());
-        Location leapLocation = soldier.getLocation().clone().add(direction.multiply(0.42D)).add(0.0D, 0.22D, 0.0D);
+        Location leapLocation = soldier.getLocation().clone().add(direction.multiply(this.settings.jumpForwardDistance())).add(0.0D, this.settings.jumpHeight(), 0.0D);
         if( moveTo(soldier, leapLocation) ) {
-            soldier.setVelocity(new Vector(0.0D, 0.08D, 0.0D));
-            soldier.getWorld().spawnParticle(Particle.CLOUD, soldier.getLocation(), 3, 0.07D, 0.02D, 0.07D, 0.01D);
-            soldier.getWorld().playSound(soldier.getLocation(), Sound.ENTITY_SLIME_JUMP_SMALL, 0.45F, 1.45F);
+            soldier.setVelocity(new Vector(0.0D, this.settings.jumpVelocityY(), 0.0D));
+            spawnParticle(Particle.CLOUD, soldier.getLocation(), scaledCount(3), 0.07D, 0.02D, 0.07D, 0.01D);
+            playSound(soldier.getLocation(), Sound.ENTITY_SLIME_JUMP_SMALL, 0.45F, 1.45F);
         }
     }
 
@@ -549,7 +569,7 @@ public final class ClaySoldierService {
         Vector step = delta.multiply(1.0D / points);
 
         for( int i = 0; i <= points; i++ ) {
-            soldier.getWorld().spawnParticle(Particle.ITEM, start.clone().add(step.clone().multiply(i)), 1, 0.01D, 0.01D, 0.01D, 0.0D,
+            spawnParticle(Particle.ITEM, start.clone().add(step.clone().multiply(i)), scaledCount(1), 0.01D, 0.01D, 0.01D, 0.0D,
                     new ItemStack(Material.CLAY_BALL));
         }
     }
@@ -614,7 +634,7 @@ public final class ClaySoldierService {
     }
 
     private double attackRange(ClaySoldierRole role) {
-        return this.settings.attackRange() * role.rangeMultiplier();
+        return this.settings.attackRange() * this.settings.role(role).rangeMultiplier();
     }
 
     private Vector horizontalDirection(Location from, Location to) {
@@ -634,7 +654,7 @@ public final class ClaySoldierService {
 
     private double getHealth(ArmorStand soldier) {
         Double health = soldier.getPersistentDataContainer().get(this.healthKey, PersistentDataType.DOUBLE);
-        return health == null ? this.settings.maxHealth() * getRole(soldier).healthMultiplier() : health;
+        return health == null ? this.settings.maxHealth() * this.settings.role(getRole(soldier)).healthMultiplier() : health;
     }
 
     private void killSoldier(ArmorStand soldier) {
@@ -643,10 +663,10 @@ public final class ClaySoldierService {
         Location location = soldier.getLocation();
         World world = soldier.getWorld();
 
-        world.playSound(location, Sound.BLOCK_GRAVEL_BREAK, 1.0F, 0.75F);
-        world.spawnParticle(Particle.BLOCK, location.clone().add(0.0D, 0.35D, 0.0D), 16, 0.16D, 0.18D, 0.16D,
+        playSound(location, Sound.BLOCK_GRAVEL_BREAK, 1.0F, 0.75F);
+        spawnParticle(Particle.BLOCK, location.clone().add(0.0D, 0.35D, 0.0D), scaledCount(16), 0.16D, 0.18D, 0.16D,
                 Material.CLAY.createBlockData());
-        team.ifPresent(value -> world.spawnParticle(Particle.DUST, location.clone().add(0.0D, 0.45D, 0.0D), 10, 0.18D, 0.16D, 0.18D,
+        team.ifPresent(value -> spawnParticle(Particle.DUST, location.clone().add(0.0D, 0.45D, 0.0D), scaledCount(10), 0.18D, 0.16D, 0.18D,
                 new Particle.DustOptions(value.armorColor(), 0.8F)));
 
         if( this.settings.dropDollOnDeath() ) {
@@ -670,10 +690,79 @@ public final class ClaySoldierService {
         return this.brains.computeIfAbsent(soldier.getUniqueId(), ignored -> new SoldierBrain());
     }
 
+    private ItemStack itemFor(Material material) {
+        return new ItemStack(material == null ? Material.AIR : material);
+    }
+
+    private boolean enabled(AttackStyle style) {
+        return this.settings.attack(style.key).enabled();
+    }
+
+    private void maybeHop(ArmorStand soldier, double chance) {
+        if( !this.settings.useJumping() || this.random.nextDouble() > chance ) {
+            return;
+        }
+
+        Location hopLocation = soldier.getLocation().clone().add(0.0D, this.settings.jumpHeight() * 0.55D, 0.0D);
+        if( moveTo(soldier, hopLocation) ) {
+            soldier.setVelocity(new Vector(0.0D, this.settings.jumpVelocityY() * 0.75D, 0.0D));
+            spawnParticle(Particle.CLOUD, soldier.getLocation(), scaledCount(2), 0.05D, 0.02D, 0.05D, 0.005D);
+        }
+    }
+
+    private double formationRangeSquared() {
+        double range = this.settings.followRange() * this.settings.formationScanRangeMultiplier();
+        return range * range;
+    }
+
+    private int scaledCount(int baseCount) {
+        return Math.max(0, (int) Math.round(baseCount * this.settings.particleScale()));
+    }
+
+    private void playSound(Location location, Sound sound, float volume, float pitch) {
+        if( this.settings.useSounds() ) {
+            location.getWorld().playSound(location, sound, volume * this.settings.soundVolume(), pitch);
+        }
+    }
+
+    private void spawnParticle(Particle particle, Location location, int count) {
+        if( this.settings.useParticles() && count > 0 ) {
+            location.getWorld().spawnParticle(particle, location, count);
+        }
+    }
+
+    private void spawnParticle(Particle particle, Location location, int count, double offsetX, double offsetY, double offsetZ, double extra) {
+        if( this.settings.useParticles() && count > 0 ) {
+            location.getWorld().spawnParticle(particle, location, count, offsetX, offsetY, offsetZ, extra);
+        }
+    }
+
+    private <T> void spawnParticle(Particle particle, Location location, int count, double offsetX, double offsetY, double offsetZ, T data) {
+        if( this.settings.useParticles() && count > 0 ) {
+            location.getWorld().spawnParticle(particle, location, count, offsetX, offsetY, offsetZ, data);
+        }
+    }
+
+    private <T> void spawnParticle(Particle particle, Location location, int count, double offsetX, double offsetY, double offsetZ, double extra, T data) {
+        if( this.settings.useParticles() && count > 0 ) {
+            location.getWorld().spawnParticle(particle, location, count, offsetX, offsetY, offsetZ, extra, data);
+        }
+    }
+
     private void applyPose(ArmorStand soldier, SoldierBrain brain, ClaySoldierRole role) {
-        double phase = (soldier.getTicksLived() + Math.abs(soldier.getUniqueId().getLeastSignificantBits() % 20L)) * 0.34D;
-        double armSwing = Math.sin(phase) * 0.65D;
-        double legSwing = Math.sin(phase + Math.PI) * 0.45D;
+        if( !this.settings.useAnimations() ) {
+            soldier.setHeadPose(new EulerAngle(0.0D, 0.0D, 0.0D));
+            soldier.setBodyPose(new EulerAngle(0.0D, 0.0D, 0.0D));
+            soldier.setRightArmPose(new EulerAngle(0.0D, 0.0D, 0.0D));
+            soldier.setLeftArmPose(new EulerAngle(0.0D, 0.0D, 0.0D));
+            soldier.setRightLegPose(new EulerAngle(0.0D, 0.0D, 0.0D));
+            soldier.setLeftLegPose(new EulerAngle(0.0D, 0.0D, 0.0D));
+            return;
+        }
+
+        double phase = (soldier.getTicksLived() + Math.abs(soldier.getUniqueId().getLeastSignificantBits() % 20L)) * this.settings.animationSpeed();
+        double armSwing = Math.sin(phase) * this.settings.runArmSwing();
+        double legSwing = Math.sin(phase + Math.PI) * this.settings.runLegSwing();
 
         EulerAngle head = new EulerAngle(0.0D, 0.0D, 0.0D);
         EulerAngle body = new EulerAngle(0.0D, 0.0D, 0.0D);
@@ -683,7 +772,7 @@ public final class ClaySoldierService {
         EulerAngle leftLeg = new EulerAngle(-0.05D, 0.0D, 0.0D);
 
         if( brain.animation == AnimationState.RUN || brain.movedThisTick ) {
-            body = new EulerAngle(0.08D, 0.0D, Math.sin(phase) * 0.06D);
+            body = new EulerAngle(0.08D, 0.0D, Math.sin(phase) * this.settings.runBodySway());
             rightArm = new EulerAngle(-0.35D + armSwing, 0.0D, 0.10D);
             leftArm = new EulerAngle(-0.35D - armSwing, 0.0D, -0.10D);
             rightLeg = new EulerAngle(legSwing, 0.0D, 0.0D);
@@ -746,26 +835,19 @@ public final class ClaySoldierService {
     }
 
     private enum AttackStyle {
-        QUICK(5, 0, 1.00D, 0.00D, AnimationState.WINDUP_QUICK, Sound.ENTITY_PLAYER_ATTACK_WEAK),
-        POKE(7, 5, 0.92D, 0.25D, AnimationState.WINDUP_POKE, Sound.ENTITY_PLAYER_ATTACK_WEAK),
-        LEAP(5, 9, 1.25D, 0.15D, AnimationState.WINDUP_LEAP, Sound.ENTITY_SLIME_JUMP_SMALL),
-        SWEEP(8, 12, 0.88D, 0.10D, AnimationState.WINDUP_SWEEP, Sound.ENTITY_PLAYER_ATTACK_SWEEP),
-        SHIELD_BASH(7, 16, 0.78D, 0.05D, AnimationState.WINDUP_BASH, Sound.ITEM_SHIELD_BLOCK),
-        SLING(10, 14, 1.00D, 0.00D, AnimationState.WINDUP_SLING, Sound.ENTITY_SNOWBALL_THROW);
+        QUICK("quick", AnimationState.WINDUP_QUICK, Sound.ENTITY_PLAYER_ATTACK_WEAK),
+        POKE("poke", AnimationState.WINDUP_POKE, Sound.ENTITY_PLAYER_ATTACK_WEAK),
+        LEAP("leap", AnimationState.WINDUP_LEAP, Sound.ENTITY_SLIME_JUMP_SMALL),
+        SWEEP("sweep", AnimationState.WINDUP_SWEEP, Sound.ENTITY_PLAYER_ATTACK_SWEEP),
+        SHIELD_BASH("shield-bash", AnimationState.WINDUP_BASH, Sound.ITEM_SHIELD_BLOCK),
+        SLING("sling", AnimationState.WINDUP_SLING, Sound.ENTITY_SNOWBALL_THROW);
 
-        private final int windupTicks;
-        private final int extraCooldownTicks;
-        private final double damageMultiplier;
-        private final double rangeBonus;
+        private final String key;
         private final AnimationState animation;
         private final Sound windupSound;
 
-        AttackStyle(int windupTicks, int extraCooldownTicks, double damageMultiplier, double rangeBonus,
-                    AnimationState animation, Sound windupSound) {
-            this.windupTicks = windupTicks;
-            this.extraCooldownTicks = extraCooldownTicks;
-            this.damageMultiplier = damageMultiplier;
-            this.rangeBonus = rangeBonus;
+        AttackStyle(String key, AnimationState animation, Sound windupSound) {
+            this.key = key;
             this.animation = animation;
             this.windupSound = windupSound;
         }
@@ -807,8 +889,8 @@ public final class ClaySoldierService {
             }
         }
 
-        private void startFlank(Random random) {
-            this.flankTicks = 24 + random.nextInt(36);
+        private void startFlank(Random random, ClaySoldierSettings settings) {
+            this.flankTicks = settings.flankDurationMinTicks() + (settings.flankDurationRange() == 0 ? 0 : random.nextInt(settings.flankDurationRange()));
             this.flankDirection = random.nextBoolean() ? 1 : -1;
         }
 

@@ -85,11 +85,17 @@ public final class ClaySoldierListener
         event.setCancelled(true);
 
         double damage = Math.max(1.0D, event.getFinalDamage());
-        if( event instanceof EntityDamageByEntityEvent damageByEntity && damageByEntity.getDamager() instanceof Player player ) {
-            damage = player.getGameMode() == GameMode.CREATIVE ? this.settings.maxHealth() : Math.max(damage, 4.0D);
+        Entity attacker = null;
+        if( event instanceof EntityDamageByEntityEvent damageByEntity ) {
+            attacker = damageByEntity.getDamager();
+            if( attacker instanceof Player player ) {
+                damage = player.getGameMode() == GameMode.CREATIVE && this.settings.creativePlayerInstantKill()
+                        ? this.settings.maxHealth() * 10.0D
+                        : Math.max(damage, this.settings.playerDamage());
+            }
         }
 
-        this.soldiers.damageSoldier(soldier, damage);
+        this.soldiers.damageSoldier(soldier, damage, attacker);
     }
 
     @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)

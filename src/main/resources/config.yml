@@ -1,15 +1,188 @@
-clay-soldiers:
-  # These match the 1.12.2 Clay Soldiers Mod defaults where there is a clear server-side equivalent.
+﻿clay-soldiers:
+  # Core stats. These are multiplied by the role and attack sections below.
   max-health: 20.0
   attack-damage: 1.0
   follow-range: 16.0
-
-  # Paper plugin approximation values. Armor stands do not have vanilla pathfinding, so movement is simulated.
-  move-step: 0.22
   attack-range: 0.75
-  attack-cooldown-ticks: 20
-  tick-period-ticks: 5
+  target-search-extra-range: 3.0
 
+  # Armor stands do not have mob pathfinding, so movement is simulated every tick-period-ticks.
+  # Higher move-step and lower tick-period-ticks make battles faster and more animated.
+  move-step: 0.30
+  attack-cooldown-ticks: 16
+  tick-period-ticks: 4
+
+  # Item and spawning limits.
   doll-stack-size: 16
   max-spawn-per-use: 64
   drop-doll-on-death: true
+
+  movement:
+    # Random movement rolls: lower means more frequent wandering. 1 means every AI tick.
+    normal-wander-roll: 4
+    skirmisher-wander-roll: 2
+    wander-step-multiplier: 0.65
+    close-combat-step-multiplier: 0.78
+
+  jumping:
+    enabled: true
+    # Chances are checked per AI tick or attack windup, from 0.0 to 1.0.
+    idle-jump-chance: 0.05
+    chase-jump-chance: 0.09
+    attack-leap-chance: 0.32
+    skirmisher-leap-chance: 0.56
+    forward-distance: 0.52
+    height: 0.28
+    velocity-y: 0.12
+
+  combat:
+    sweep-min-enemies: 2
+    sweep-cluster-radius: 1.15
+    sweep-chance: 0.35
+    guard-shield-bash-chance: 0.48
+    warrior-leap-chance: 0.28
+    leap-min-distance: 0.45
+    shield-bash-push-distance: 0.42
+    sweep-splash-damage-multiplier: 0.65
+    player-damage: 4.0
+    creative-player-instant-kill: true
+
+  formations:
+    enabled: true
+    columns: 5
+    lateral-spacing: 0.50
+    row-spacing: 0.34
+    base-distance-multiplier: 0.82
+    scan-range-multiplier: 1.0
+    skirmisher-flank-width: 1.25
+    skirmisher-flank-column-spacing: 0.25
+    skirmisher-flank-row-spacing: 0.20
+
+  flanking:
+    enabled: true
+    chance-scale: 0.16
+    duration-min-ticks: 24
+    duration-max-ticks: 60
+    side-offset: 1.35
+    side-jitter: 0.35
+    back-offset: 0.38
+
+  dodging:
+    enabled: true
+    cooldown-min-ticks: 18
+    cooldown-max-ticks: 34
+    side-distance-min: 0.56
+    side-distance-max: 0.86
+    back-distance: 0.24
+
+  sounds:
+    enabled: true
+    volume: 1.0
+    pitch-jitter: 0.25
+
+  particles:
+    enabled: true
+    # Multiplies particle counts. 0 disables counts without disabling particle code entirely.
+    scale: 1.0
+
+  animations:
+    enabled: true
+    speed: 0.34
+    run-arm-swing: 0.65
+    run-leg-swing: 0.45
+    run-body-sway: 0.06
+
+  roles:
+    warrior:
+      enabled: true
+      health-multiplier: 1.00
+      damage-multiplier: 1.00
+      speed-multiplier: 1.00
+      range-multiplier: 1.00
+      dodge-chance: 0.12
+      flank-chance: 0.22
+      formation-depth: 0.00
+      main-hand: STICK
+      off-hand: none
+    guard:
+      enabled: true
+      health-multiplier: 1.40
+      damage-multiplier: 0.82
+      speed-multiplier: 0.72
+      range-multiplier: 1.18
+      dodge-chance: 0.05
+      flank-chance: 0.08
+      formation-depth: -0.20
+      main-hand: STICK
+      off-hand: SHIELD
+    spearman:
+      enabled: true
+      health-multiplier: 0.90
+      damage-multiplier: 0.88
+      speed-multiplier: 0.86
+      range-multiplier: 1.55
+      dodge-chance: 0.10
+      flank-chance: 0.18
+      formation-depth: 0.45
+      main-hand: BAMBOO
+      off-hand: none
+    skirmisher:
+      enabled: true
+      health-multiplier: 0.72
+      damage-multiplier: 0.74
+      speed-multiplier: 1.38
+      range-multiplier: 0.88
+      dodge-chance: 0.42
+      flank-chance: 0.62
+      formation-depth: 0.15
+      main-hand: FEATHER
+      off-hand: none
+    slinger:
+      enabled: true
+      health-multiplier: 0.80
+      damage-multiplier: 0.62
+      speed-multiplier: 1.05
+      range-multiplier: 5.50
+      dodge-chance: 0.22
+      flank-chance: 0.35
+      formation-depth: 1.20
+      main-hand: SNOWBALL
+      off-hand: none
+
+  attacks:
+    quick:
+      enabled: true
+      windup-ticks: 5
+      extra-cooldown-ticks: 0
+      damage-multiplier: 1.00
+      range-bonus: 0.00
+    poke:
+      enabled: true
+      windup-ticks: 7
+      extra-cooldown-ticks: 5
+      damage-multiplier: 0.92
+      range-bonus: 0.25
+    leap:
+      enabled: true
+      windup-ticks: 5
+      extra-cooldown-ticks: 9
+      damage-multiplier: 1.25
+      range-bonus: 0.15
+    sweep:
+      enabled: true
+      windup-ticks: 8
+      extra-cooldown-ticks: 12
+      damage-multiplier: 0.88
+      range-bonus: 0.10
+    shield-bash:
+      enabled: true
+      windup-ticks: 7
+      extra-cooldown-ticks: 16
+      damage-multiplier: 0.78
+      range-bonus: 0.05
+    sling:
+      enabled: true
+      windup-ticks: 10
+      extra-cooldown-ticks: 14
+      damage-multiplier: 1.00
+      range-bonus: 0.00
