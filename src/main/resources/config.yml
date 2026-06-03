@@ -17,6 +17,15 @@
   max-spawn-per-use: 64
   drop-doll-on-death: true
 
+  nameplates:
+    enabled: true
+    show-team: true
+    show-role: true
+    show-health-text: true
+    health-bar-segments: 10
+    healthy-threshold: 0.60
+    low-threshold: 0.30
+
   movement:
     # Random movement rolls: lower means more frequent wandering. 1 means every AI tick.
     normal-wander-roll: 4

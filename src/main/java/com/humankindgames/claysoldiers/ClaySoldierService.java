@@ -4,12 +4,14 @@ import java.util.Comparator;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Random;
 import java.util.Set;
 import java.util.UUID;
 import net.kyori.adventure.text.Component;
+import net.kyori.adventure.text.format.NamedTextColor;
 import org.bukkit.Location;
 import org.bukkit.Material;
 import org.bukkit.NamespacedKey;
@@ -90,9 +92,10 @@ public final class ClaySoldierService {
     }
 
     public void registerIfSoldier(Entity entity) {
-        if( isSoldier(entity) ) {
-            this.activeSoldiers.add(entity.getUniqueId());
-            this.brains.computeIfAbsent(entity.getUniqueId(), ignored -> new SoldierBrain());
+        if( entity instanceof ArmorStand armorStand && isSoldier(armorStand) ) {
+            this.activeSoldiers.add(armorStand.getUniqueId());
+            this.brains.computeIfAbsent(armorStand.getUniqueId(), ignored -> new SoldierBrain());
+            updateNameplate(armorStand);
         }
     }
 
@@ -189,6 +192,7 @@ public final class ClaySoldierService {
         }
 
         soldier.getPersistentDataContainer().set(this.healthKey, PersistentDataType.DOUBLE, health);
+        updateNameplate(soldier);
         playSound(soldier.getLocation(), Sound.ENTITY_ARMOR_STAND_HIT, 0.55F, 1.25F);
         SoldierBrain brain = brain(soldier);
         brain.animation = AnimationState.HIT;
@@ -232,15 +236,14 @@ public final class ClaySoldierService {
         stand.setPersistent(true);
         stand.setRemoveWhenFarAway(false);
         stand.setCollidable(false);
-        stand.setCustomNameVisible(false);
-        stand.customName(Component.text(team.displayName() + " " + role.displayName(), team.textColor()));
 
         PersistentDataContainer data = stand.getPersistentDataContainer();
         data.set(this.entityTypeKey, PersistentDataType.STRING, SOLDIER_ENTITY_TYPE);
         data.set(this.teamKey, PersistentDataType.STRING, team.key());
         data.set(this.roleKey, PersistentDataType.STRING, role.key());
         ClaySoldierSettings.RoleTuning roleTuning = this.settings.role(role);
-        data.set(this.healthKey, PersistentDataType.DOUBLE, this.settings.maxHealth() * roleTuning.healthMultiplier());
+        data.set(this.healthKey, PersistentDataType.DOUBLE, maxHealth(role));
+        updateNameplate(stand);
 
         EntityEquipment equipment = stand.getEquipment();
         if( equipment != null ) {
@@ -654,7 +657,86 @@ public final class ClaySoldierService {
 
     private double getHealth(ArmorStand soldier) {
         Double health = soldier.getPersistentDataContainer().get(this.healthKey, PersistentDataType.DOUBLE);
-        return health == null ? this.settings.maxHealth() * this.settings.role(getRole(soldier)).healthMultiplier() : health;
+        return health == null ? maxHealth(getRole(soldier)) : health;
+    }
+
+    private double maxHealth(ClaySoldierRole role) {
+        return this.settings.maxHealth() * this.settings.role(role).healthMultiplier();
+    }
+
+    private void updateNameplate(ArmorStand soldier) {
+        if( !this.settings.useNameplates() ) {
+            soldier.setCustomNameVisible(false);
+            return;
+        }
+
+        Optional<ClayTeam> team = getTeam(soldier);
+        ClaySoldierRole role = getRole(soldier);
+        double maxHealth = Math.max(1.0D, maxHealth(role));
+        double health = Math.max(0.0D, Math.min(maxHealth, getHealth(soldier)));
+
+        Component nameplate = Component.empty();
+        boolean hasContent = false;
+
+        if( this.settings.nameplateShowTeam() && team.isPresent() ) {
+            nameplate = nameplate.append(Component.text(team.get().displayName(), team.get().textColor()));
+            hasContent = true;
+        }
+
+        if( this.settings.nameplateShowRole() ) {
+            nameplate = appendSpaceIfNeeded(nameplate, hasContent)
+                    .append(Component.text(role.displayName(), role.textColor()));
+            hasContent = true;
+        }
+
+        nameplate = appendSpaceIfNeeded(nameplate, hasContent)
+                .append(healthBar(health, maxHealth));
+        hasContent = true;
+
+        if( this.settings.nameplateShowHealthText() ) {
+            nameplate = appendSpaceIfNeeded(nameplate, hasContent)
+                    .append(Component.text(formatHealth(health) + "/" + formatHealth(maxHealth), NamedTextColor.WHITE));
+        }
+
+        soldier.customName(nameplate);
+        soldier.setCustomNameVisible(true);
+    }
+
+    private Component appendSpaceIfNeeded(Component component, boolean needed) {
+        return needed ? component.append(Component.text(" ")) : component;
+    }
+
+    private Component healthBar(double health, double maxHealth) {
+        int segments = this.settings.nameplateHealthBarSegments();
+        double ratio = Math.max(0.0D, Math.min(1.0D, health / maxHealth));
+        int filledSegments = Math.max(0, Math.min(segments, (int) Math.round(ratio * segments)));
+        int emptySegments = segments - filledSegments;
+
+        return Component.text("[", NamedTextColor.DARK_GRAY)
+                .append(Component.text("|".repeat(filledSegments), healthColor(ratio)))
+                .append(Component.text("-".repeat(emptySegments), NamedTextColor.DARK_GRAY))
+                .append(Component.text("]", NamedTextColor.DARK_GRAY));
+    }
+
+    private NamedTextColor healthColor(double ratio) {
+        if( ratio <= this.settings.nameplateLowThreshold() ) {
+            return NamedTextColor.RED;
+        }
+
+        if( ratio < this.settings.nameplateHealthyThreshold() ) {
+            return NamedTextColor.YELLOW;
+        }
+
+        return NamedTextColor.GREEN;
+    }
+
+    private String formatHealth(double value) {
+        double rounded = Math.rint(value);
+        if( Math.abs(value - rounded) < 0.05D ) {
+            return Long.toString(Math.round(rounded));
+        }
+
+        return String.format(Locale.ROOT, "%.1f", value);
     }
 
     private void killSoldier(ArmorStand soldier) {
