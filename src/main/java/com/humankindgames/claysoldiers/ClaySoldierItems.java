@@ -173,6 +173,14 @@ public final class ClaySoldierItems {
         return Optional.empty();
     }
 
+    public Optional<ItemStack> createBaseDollCraftingResult(List<ItemStack> ingredients) {
+        if( !this.settings.craftingEnabled() || !matchesBaseDollRecipe(ingredients) ) {
+            return Optional.empty();
+        }
+
+        return Optional.of(createSoldierDoll(ClayTeam.CLAY, ClaySoldierRole.WARRIOR, this.settings.baseDollOutputAmount()));
+    }
+
     public ItemStack createArmorPiece(Material material, ClayTeam team) {
         ItemStack item = new ItemStack(material);
         LeatherArmorMeta meta = (LeatherArmorMeta) item.getItemMeta();
@@ -190,17 +198,59 @@ public final class ClaySoldierItems {
         this.plugin.getServer().removeRecipe(this.soldierDollRecipeKey);
         this.plugin.getServer().removeRecipe(this.shapelessSoldierDollRecipeKey);
 
-        ShapedRecipe recipe = new ShapedRecipe(this.soldierDollRecipeKey, createSoldierDoll(ClayTeam.CLAY, ClaySoldierRole.WARRIOR, 4));
-        recipe.shape("C", "S");
-        recipe.setIngredient('C', Material.CLAY_BALL);
-        recipe.setIngredient('S', Material.SOUL_SAND);
+        List<Material> ingredients = this.settings.baseDollIngredients();
+        if( ingredients.isEmpty() ) {
+            return;
+        }
 
-        this.plugin.getServer().addRecipe(recipe);
+        ItemStack result = createSoldierDoll(ClayTeam.CLAY, ClaySoldierRole.WARRIOR, this.settings.baseDollOutputAmount());
+        if( this.settings.baseDollShapedRecipeEnabled() && ingredients.size() >= 2 ) {
+            ShapedRecipe recipe = new ShapedRecipe(this.soldierDollRecipeKey, result.clone());
+            recipe.shape("A", "B");
+            recipe.setIngredient('A', ingredients.get(0));
+            recipe.setIngredient('B', ingredients.get(1));
+            this.plugin.getServer().addRecipe(recipe);
+        }
 
-        ShapelessRecipe shapelessRecipe = new ShapelessRecipe(this.shapelessSoldierDollRecipeKey, createSoldierDoll(ClayTeam.CLAY, ClaySoldierRole.WARRIOR, 4));
-        shapelessRecipe.addIngredient(Material.CLAY_BALL);
-        shapelessRecipe.addIngredient(Material.SOUL_SAND);
-        this.plugin.getServer().addRecipe(shapelessRecipe);
+        if( this.settings.baseDollShapelessRecipeEnabled() ) {
+            ShapelessRecipe shapelessRecipe = new ShapelessRecipe(this.shapelessSoldierDollRecipeKey, result.clone());
+            for( Material ingredient : ingredients ) {
+                shapelessRecipe.addIngredient(ingredient);
+            }
+            this.plugin.getServer().addRecipe(shapelessRecipe);
+        }
+    }
+
+    private boolean matchesBaseDollRecipe(List<ItemStack> ingredients) {
+        List<Material> recipe = this.settings.baseDollIngredients();
+        if( ingredients.size() != recipe.size() ) {
+            return false;
+        }
+
+        Map<Material, Integer> required = new java.util.HashMap<>();
+        for( Material material : recipe ) {
+            required.merge(material, 1, Integer::sum);
+        }
+
+        for( ItemStack ingredient : ingredients ) {
+            if( ingredient == null || ingredient.getType().isAir() ) {
+                return false;
+            }
+
+            Material material = ingredient.getType();
+            Integer remaining = required.get(material);
+            if( remaining == null || remaining <= 0 ) {
+                return false;
+            }
+
+            if( remaining == 1 ) {
+                required.remove(material);
+            } else {
+                required.put(material, remaining - 1);
+            }
+        }
+
+        return required.isEmpty();
     }
 
     private Optional<ClaySoldierRole> roleUpgradeFor(Material material) {

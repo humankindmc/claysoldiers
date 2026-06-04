@@ -45,6 +45,16 @@
 
   crafting:
     enabled: true
+    recipes:
+      base-doll:
+        shaped-enabled: true
+        shapeless-enabled: true
+        output-amount: 4
+        # Default base doll recipe: CLAY_BALL + SOUL_SAND.
+        # The shaped version places the first ingredient over the second.
+        ingredients:
+          - CLAY_BALL
+          - SOUL_SAND
     # Dynamic upgrade crafting: one clay soldier doll plus one ingredient.
     # Role upgrades only apply to base warrior dolls and preserve team/modifiers.
     team-recoloring-enabled: true
@@ -64,6 +74,13 @@
     pathfinding-max-step-height: 1.0
     pathfinding-side-step-multiplier: 0.90
     pathfinding-back-step-multiplier: 0.60
+    pathfinding-allow-one-block-step: true
+    pathfinding-allow-stairs: true
+    pathfinding-allow-slabs: true
+    pathfinding-obstacle-probe-distance: 0.25
+    pathfinding-detour-probe-distance: 0.58
+    pathfinding-line-of-sight-probe-distance: 0.25
+    require-line-of-sight-for-attacks: true
 
   jumping:
     enabled: true

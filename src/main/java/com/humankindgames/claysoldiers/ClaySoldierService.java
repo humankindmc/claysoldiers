@@ -19,6 +19,7 @@ import org.bukkit.Particle;
 import org.bukkit.Sound;
 import org.bukkit.World;
 import org.bukkit.block.Block;
+import org.bukkit.block.data.type.Slab;
 import org.bukkit.entity.ArmorStand;
 import org.bukkit.entity.Entity;
 import org.bukkit.inventory.EntityEquipment;
@@ -410,7 +411,7 @@ public final class ClaySoldierService {
         TacticalFormation tacticalFormation = brain.activeFormation;
         face(soldier, target.getLocation());
 
-        if( distanceSquared <= attackRange * attackRange && brain.attackCooldownTicks <= 0 ) {
+        if( distanceSquared <= attackRange * attackRange && brain.attackCooldownTicks <= 0 && hasAttackLineOfSight(soldier, target) ) {
             queueAttack(soldier, target, brain, role, Math.sqrt(distanceSquared));
             return;
         }
@@ -523,6 +524,9 @@ public final class ClaySoldierService {
         ClaySoldierSettings.RoleTuning roleTuning = this.settings.role(role);
         double maxRange = attackRange(soldier, role) + attackTuning.rangeBonus();
         if( soldier.getLocation().distanceSquared(target.getLocation()) > maxRange * maxRange ) {
+            return;
+        }
+        if( !hasAttackLineOfSight(soldier, target) ) {
             return;
         }
 
@@ -956,7 +960,7 @@ public final class ClaySoldierService {
         direction.normalize();
         Location next = current.clone().add(direction.clone().multiply(stepSize));
         next.setDirection(direction);
-        if( moveTo(soldier, next) ) {
+        if( hasClearMovementPath(current, next) && moveTo(soldier, next) ) {
             return true;
         }
 
@@ -968,22 +972,10 @@ public final class ClaySoldierService {
     }
 
     private boolean moveTo(ArmorStand soldier, Location location) {
-        if( canOccupy(location) ) {
-            soldier.teleport(location);
+        Optional<Location> resolved = resolveOccupyLocation(soldier.getLocation(), location);
+        if( resolved.isPresent() ) {
+            soldier.teleport(resolved.get());
             return true;
-        }
-
-        int maxStepHeight = Math.max(0, (int) Math.floor(this.settings.pathfindingMaxStepHeight()));
-        for( int stepHeight = 1; stepHeight <= maxStepHeight; stepHeight++ ) {
-            Location steppedLocation = location.clone().add(0.0D, stepHeight, 0.0D);
-            if( canOccupy(steppedLocation) ) {
-                soldier.teleport(steppedLocation);
-                if( this.settings.useJumping() ) {
-                    soldier.setVelocity(new Vector(0.0D, this.settings.jumpVelocityY(), 0.0D));
-                    spawnParticle(Particle.CLOUD, soldier.getLocation(), scaledCount(1), 0.04D, 0.02D, 0.04D, 0.004D);
-                }
-                return true;
-            }
         }
 
         return false;
@@ -991,8 +983,8 @@ public final class ClaySoldierService {
 
     private boolean tryBlockedMovement(ArmorStand soldier, Location current, Vector direction, double stepSize) {
         int side = this.random.nextBoolean() ? 1 : -1;
-        double sideStep = stepSize * this.settings.pathfindingSideStepMultiplier();
-        double backStep = stepSize * this.settings.pathfindingBackStepMultiplier();
+        double sideStep = Math.max(stepSize * this.settings.pathfindingSideStepMultiplier(), this.settings.pathfindingDetourProbeDistance());
+        double backStep = Math.max(stepSize * this.settings.pathfindingBackStepMultiplier(), this.settings.pathfindingDetourProbeDistance() * 0.65D);
 
         for( double degrees : new double[] {25.0D, 45.0D, 70.0D, 95.0D, 130.0D} ) {
             if( tryStep(soldier, current, rotateY(direction, degrees * side), sideStep) ) {
@@ -1016,7 +1008,7 @@ public final class ClaySoldierService {
     private boolean tryStep(ArmorStand soldier, Location current, Vector direction, double stepSize) {
         Location next = current.clone().add(direction.clone().multiply(stepSize));
         next.setDirection(direction);
-        return moveTo(soldier, next);
+        return hasClearMovementPath(current, next) && moveTo(soldier, next);
     }
 
     private Vector rotateY(Vector direction, double degrees) {
@@ -1031,7 +1023,162 @@ public final class ClaySoldierService {
     private boolean canOccupy(Location location) {
         Block feet = location.getBlock();
         Block head = location.clone().add(0.0D, 1.0D, 0.0D).getBlock();
-        return feet.isPassable() && head.isPassable();
+        return canOccupyFeet(feet, location) && head.isPassable();
+    }
+
+    private boolean canOccupyFeet(Block feet, Location location) {
+        if( feet.isPassable() ) {
+            return true;
+        }
+
+        return isPartialStepBlock(feet)
+                && location.getY() + 0.02D >= blockSurfaceY(feet)
+                && location.getY() < feet.getY() + 1.0D;
+    }
+
+    private Optional<Location> resolveOccupyLocation(Location current, Location target) {
+        if( canOccupy(target) ) {
+            return Optional.of(target);
+        }
+
+        Optional<Location> stepped = resolveStepLocation(current, target);
+        if( stepped.isPresent() ) {
+            return stepped;
+        }
+
+        int maxStepHeight = Math.max(0, (int) Math.floor(this.settings.pathfindingMaxStepHeight()));
+        for( int stepHeight = 1; stepHeight <= maxStepHeight; stepHeight++ ) {
+            Location steppedLocation = target.clone().add(0.0D, stepHeight, 0.0D);
+            if( canOccupy(steppedLocation) ) {
+                if( this.settings.useJumping() ) {
+                    spawnParticle(Particle.CLOUD, steppedLocation, scaledCount(1), 0.04D, 0.02D, 0.04D, 0.004D);
+                }
+                return Optional.of(steppedLocation);
+            }
+        }
+
+        return Optional.empty();
+    }
+
+    private Optional<Location> resolveStepLocation(Location current, Location target) {
+        if( !this.settings.pathfindingEnabled() ) {
+            return Optional.empty();
+        }
+
+        Block obstacle = target.getBlock();
+        if( obstacle.isPassable() ) {
+            Vector direction = target.toVector().subtract(current.toVector());
+            direction.setY(0.0D);
+            if( direction.lengthSquared() < MIN_MOVE_DISTANCE_SQUARED ) {
+                return Optional.empty();
+            }
+
+            direction.normalize();
+            obstacle = current.clone()
+                    .add(direction.multiply(Math.min(this.settings.pathfindingDetourProbeDistance(), Math.max(this.settings.moveStep(), current.distance(target) + 0.10D))))
+                    .getBlock();
+        }
+
+        if( !isStepObstacle(obstacle) || !obstacle.getRelative(0, 1, 0).isPassable() ) {
+            return Optional.empty();
+        }
+
+        Location stepped = target.clone();
+        stepped.setY(blockSurfaceY(obstacle));
+        return canOccupy(stepped) ? Optional.of(stepped) : Optional.empty();
+    }
+
+    private boolean hasClearMovementPath(Location from, Location to) {
+        if( !this.settings.pathfindingEnabled() ) {
+            return true;
+        }
+
+        Vector delta = to.toVector().subtract(from.toVector());
+        double distance = delta.length();
+        if( distance < 0.001D ) {
+            return true;
+        }
+
+        int samples = Math.max(1, (int) Math.ceil(distance / Math.max(0.05D, this.settings.pathfindingObstacleProbeDistance())));
+        Vector step = delta.multiply(1.0D / samples);
+        for( int i = 1; i <= samples; i++ ) {
+            Location sample = from.clone().add(step.clone().multiply(i));
+            if( canOccupy(sample) || resolveStepLocation(from, sample).isPresent() ) {
+                continue;
+            }
+
+            return false;
+        }
+
+        return true;
+    }
+
+    private boolean hasAttackLineOfSight(ArmorStand soldier, ArmorStand target) {
+        if( !this.settings.requireLineOfSightForAttacks() ) {
+            return true;
+        }
+
+        Location start = soldier.getLocation().clone().add(0.0D, 0.58D, 0.0D);
+        Location end = target.getLocation().clone().add(0.0D, 0.58D, 0.0D);
+        Vector delta = end.toVector().subtract(start.toVector());
+        double distance = delta.length();
+        if( distance < 0.001D ) {
+            return true;
+        }
+
+        int samples = Math.max(1, (int) Math.ceil(distance / Math.max(0.05D, this.settings.pathfindingLineOfSightProbeDistance())));
+        Vector step = delta.multiply(1.0D / samples);
+        for( int i = 1; i < samples; i++ ) {
+            Location sample = start.clone().add(step.clone().multiply(i));
+            if( blocksAttackLineOfSight(sample) ) {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    private boolean blocksAttackLineOfSight(Location sample) {
+        Block block = sample.getBlock();
+        if( block.isPassable() ) {
+            return false;
+        }
+
+        return !isPartialStepBlock(block) || sample.getY() <= blockSurfaceY(block) + 0.05D;
+    }
+
+    private boolean isStepObstacle(Block block) {
+        if( isSlab(block) ) {
+            return this.settings.pathfindingAllowSlabs();
+        }
+        if( isStairs(block) ) {
+            return this.settings.pathfindingAllowStairs();
+        }
+
+        return this.settings.pathfindingAllowOneBlockStep()
+                && block.getType().isSolid()
+                && block.getType().isOccluding();
+    }
+
+    private boolean isPartialStepBlock(Block block) {
+        return (this.settings.pathfindingAllowSlabs() && isSlab(block))
+                || (this.settings.pathfindingAllowStairs() && isStairs(block));
+    }
+
+    private boolean isSlab(Block block) {
+        return block.getBlockData() instanceof Slab;
+    }
+
+    private boolean isStairs(Block block) {
+        return block.getType().name().endsWith("_STAIRS");
+    }
+
+    private double blockSurfaceY(Block block) {
+        if( block.getBlockData() instanceof Slab slab && slab.getType() == Slab.Type.BOTTOM ) {
+            return block.getY() + 0.5D;
+        }
+
+        return block.getY() + 1.0D;
     }
 
     private void face(ArmorStand soldier, Location target) {

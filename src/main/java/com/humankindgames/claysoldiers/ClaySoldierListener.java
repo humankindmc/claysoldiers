@@ -1,5 +1,7 @@
 package com.humankindgames.claysoldiers;
 
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Optional;
 import java.util.Map;
 import java.util.logging.Level;
@@ -139,11 +141,14 @@ public final class ClaySoldierListener
     public void onPrepareCraft(PrepareItemCraftEvent event) {
         ItemStack doll = null;
         ItemStack ingredient = null;
+        List<ItemStack> ingredients = new ArrayList<>();
 
         for( ItemStack item : event.getInventory().getMatrix() ) {
             if( item == null || item.getType().isAir() ) {
                 continue;
             }
+
+            ingredients.add(item);
 
             if( this.items.isSoldierDoll(item) ) {
                 if( doll != null ) {
@@ -153,12 +158,18 @@ public final class ClaySoldierListener
                 doll = item;
                 continue;
             }
+        }
 
-            if( ingredient != null ) {
-                event.getInventory().setResult(null);
-                return;
+        if( doll != null ) {
+            for( ItemStack item : ingredients ) {
+                if( !this.items.isSoldierDoll(item) ) {
+                    if( ingredient != null ) {
+                        event.getInventory().setResult(null);
+                        return;
+                    }
+                    ingredient = item;
+                }
             }
-            ingredient = item;
         }
 
         Optional<ItemStack> result = this.items.createCraftingResult(doll, ingredient);
@@ -166,6 +177,8 @@ public final class ClaySoldierListener
             event.getInventory().setResult(result.get());
         } else if( doll != null ) {
             event.getInventory().setResult(null);
+        } else {
+            this.items.createBaseDollCraftingResult(ingredients).ifPresent(event.getInventory()::setResult);
         }
     }
 

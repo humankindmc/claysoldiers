@@ -1,6 +1,8 @@
 package com.humankindgames.claysoldiers;
 
+import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import org.bukkit.Material;
@@ -40,6 +42,10 @@ public record ClaySoldierSettings(
         String nameplateBarLostColor,
         String nameplateBarBracketColor,
         boolean craftingEnabled,
+        boolean baseDollShapedRecipeEnabled,
+        boolean baseDollShapelessRecipeEnabled,
+        int baseDollOutputAmount,
+        List<Material> baseDollIngredients,
         boolean teamRecoloringEnabled,
         Map<ClaySoldierRole, Material> roleUpgradeIngredients,
         boolean useFormations,
@@ -96,6 +102,13 @@ public record ClaySoldierSettings(
         double pathfindingMaxStepHeight,
         double pathfindingSideStepMultiplier,
         double pathfindingBackStepMultiplier,
+        boolean pathfindingAllowOneBlockStep,
+        boolean pathfindingAllowStairs,
+        boolean pathfindingAllowSlabs,
+        double pathfindingObstacleProbeDistance,
+        double pathfindingDetourProbeDistance,
+        double pathfindingLineOfSightProbeDistance,
+        boolean requireLineOfSightForAttacks,
         double targetSearchExtraRange,
         int sweepMinEnemies,
         double sweepClusterRadius,
@@ -178,6 +191,10 @@ public record ClaySoldierSettings(
                 config.getString(base + "nameplates.health-bar.lost-color", "red"),
                 config.getString(base + "nameplates.health-bar.bracket-color", "dark_gray"),
                 config.getBoolean(base + "crafting.enabled", true),
+                config.getBoolean(base + "crafting.recipes.base-doll.shaped-enabled", true),
+                config.getBoolean(base + "crafting.recipes.base-doll.shapeless-enabled", true),
+                clamp(config.getInt(base + "crafting.recipes.base-doll.output-amount", 4), 1, 64),
+                parseMaterialList(config, base + "crafting.recipes.base-doll.ingredients", List.of(Material.CLAY_BALL, Material.SOUL_SAND)),
                 config.getBoolean(base + "crafting.team-recoloring-enabled", true),
                 Map.copyOf(roleUpgradeIngredients),
                 config.getBoolean(base + "formations.enabled", true),
@@ -234,6 +251,13 @@ public record ClaySoldierSettings(
                 config.getDouble(base + "movement.pathfinding-max-step-height", 1.0D),
                 config.getDouble(base + "movement.pathfinding-side-step-multiplier", 0.90D),
                 config.getDouble(base + "movement.pathfinding-back-step-multiplier", 0.60D),
+                config.getBoolean(base + "movement.pathfinding-allow-one-block-step", true),
+                config.getBoolean(base + "movement.pathfinding-allow-stairs", true),
+                config.getBoolean(base + "movement.pathfinding-allow-slabs", true),
+                config.getDouble(base + "movement.pathfinding-obstacle-probe-distance", 0.25D),
+                config.getDouble(base + "movement.pathfinding-detour-probe-distance", 0.58D),
+                config.getDouble(base + "movement.pathfinding-line-of-sight-probe-distance", 0.25D),
+                config.getBoolean(base + "movement.require-line-of-sight-for-attacks", true),
                 config.getDouble(base + "target-search-extra-range", 3.0D),
                 clamp(config.getInt(base + "combat.sweep-min-enemies", 2), 1, 100),
                 config.getDouble(base + "combat.sweep-cluster-radius", 1.15D),
@@ -310,6 +334,23 @@ public record ClaySoldierSettings(
 
         Material material = Material.matchMaterial(configured);
         return material == null ? fallback : material;
+    }
+
+    private static List<Material> parseMaterialList(FileConfiguration config, String path, List<Material> fallback) {
+        List<String> configured = config.getStringList(path);
+        if( configured.isEmpty() ) {
+            return List.copyOf(fallback);
+        }
+
+        List<Material> materials = new ArrayList<>();
+        for( String value : configured ) {
+            Material material = parseMaterial(value, null);
+            if( material != null && !material.isAir() ) {
+                materials.add(material);
+            }
+        }
+
+        return materials.isEmpty() ? List.copyOf(fallback) : List.copyOf(materials);
     }
 
     private static void putMaterial(Map<ClaySoldierRole, Material> materials, ClaySoldierRole role, Material material) {
