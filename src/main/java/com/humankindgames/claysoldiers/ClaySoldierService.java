@@ -325,6 +325,7 @@ public final class ClaySoldierService {
             SoldierBrain brain = brain(soldier);
             ClaySoldierRole role = getRole(soldier);
             brain.tick(this.settings.tickPeriodTicks());
+            updateFormationState(soldier, brain, role);
 
             if( brain.windupTicks > 0 ) {
                 tickWindup(soldier, brain, role);
@@ -339,6 +340,18 @@ public final class ClaySoldierService {
 
             applyPose(soldier, brain, role);
             brain.movedThisTick = false;
+        }
+    }
+
+    private void updateFormationState(ArmorStand soldier, SoldierBrain brain, ClaySoldierRole role) {
+        TacticalFormation previousFormation = brain.activeFormation;
+        brain.activeFormation = tacticalFormation(soldier, role);
+        if( previousFormation != brain.activeFormation ) {
+            updateNameplate(soldier);
+            if( previousFormation == TacticalFormation.NONE && brain.activeFormation.isActive() && this.settings.formationSoundEnabled() ) {
+                playSound(soldier.getLocation(), Sound.BLOCK_NOTE_BLOCK_PLING, 0.55F, 1.65F);
+                spawnParticle(Particle.HAPPY_VILLAGER, soldier.getLocation().clone().add(0.0D, 0.85D, 0.0D), scaledCount(2), 0.06D, 0.05D, 0.06D, 0.0D);
+            }
         }
     }
 
@@ -392,7 +405,7 @@ public final class ClaySoldierService {
         double distanceSquared = soldier.getLocation().distanceSquared(target.getLocation());
         double attackRange = attackRange(soldier, role);
         ClaySoldierSettings.RoleTuning roleTuning = this.settings.role(role);
-        TacticalFormation tacticalFormation = tacticalFormation(soldier, role);
+        TacticalFormation tacticalFormation = brain.activeFormation;
         face(soldier, target.getLocation());
 
         if( distanceSquared <= attackRange * attackRange && brain.attackCooldownTicks <= 0 ) {
@@ -477,7 +490,7 @@ public final class ClaySoldierService {
             return;
         }
 
-        TacticalFormation tacticalFormation = tacticalFormation(soldier, role);
+        TacticalFormation tacticalFormation = brain.activeFormation;
         double damage = this.settings.attackDamage() * damageMultiplier(soldier, roleTuning) * attackTuning.damageMultiplier();
         if( tacticalFormation.isWall() ) {
             damage *= this.settings.tacticalFormationDamageMultiplier();
@@ -871,6 +884,10 @@ public final class ClaySoldierService {
             return true;
         }
 
+        if( !this.settings.pathfindingEnabled() ) {
+            return false;
+        }
+
         return tryBlockedMovement(soldier, current, direction, stepSize);
     }
 
@@ -880,23 +897,39 @@ public final class ClaySoldierService {
             return true;
         }
 
+        int maxStepHeight = Math.max(0, (int) Math.floor(this.settings.pathfindingMaxStepHeight()));
+        for( int stepHeight = 1; stepHeight <= maxStepHeight; stepHeight++ ) {
+            Location steppedLocation = location.clone().add(0.0D, stepHeight, 0.0D);
+            if( canOccupy(steppedLocation) ) {
+                soldier.teleport(steppedLocation);
+                if( this.settings.useJumping() ) {
+                    soldier.setVelocity(new Vector(0.0D, this.settings.jumpVelocityY(), 0.0D));
+                    spawnParticle(Particle.CLOUD, soldier.getLocation(), scaledCount(1), 0.04D, 0.02D, 0.04D, 0.004D);
+                }
+                return true;
+            }
+        }
+
         return false;
     }
 
     private boolean tryBlockedMovement(ArmorStand soldier, Location current, Vector direction, double stepSize) {
-        Vector firstSide = perpendicular(direction).multiply(this.random.nextBoolean() ? 1.0D : -1.0D);
-        Vector secondSide = firstSide.clone().multiply(-1.0D);
+        int side = this.random.nextBoolean() ? 1 : -1;
+        double sideStep = stepSize * this.settings.pathfindingSideStepMultiplier();
+        double backStep = stepSize * this.settings.pathfindingBackStepMultiplier();
+
+        for( double degrees : new double[] {25.0D, 45.0D, 70.0D, 95.0D, 130.0D} ) {
+            if( tryStep(soldier, current, rotateY(direction, degrees * side), sideStep) ) {
+                return true;
+            }
+
+            if( tryStep(soldier, current, rotateY(direction, -degrees * side), sideStep) ) {
+                return true;
+            }
+        }
+
         Vector reverse = direction.clone().multiply(-1.0D);
-
-        if( tryStep(soldier, current, firstSide, stepSize * 0.75D) ) {
-            return true;
-        }
-
-        if( tryStep(soldier, current, secondSide, stepSize * 0.75D) ) {
-            return true;
-        }
-
-        if( tryStep(soldier, current, reverse, stepSize * 0.60D) ) {
+        if( tryStep(soldier, current, reverse, backStep) ) {
             return true;
         }
 
@@ -908,6 +941,15 @@ public final class ClaySoldierService {
         Location next = current.clone().add(direction.clone().multiply(stepSize));
         next.setDirection(direction);
         return moveTo(soldier, next);
+    }
+
+    private Vector rotateY(Vector direction, double degrees) {
+        double radians = Math.toRadians(degrees);
+        double cos = Math.cos(radians);
+        double sin = Math.sin(radians);
+        double x = direction.getX() * cos - direction.getZ() * sin;
+        double z = direction.getX() * sin + direction.getZ() * cos;
+        return new Vector(x, 0.0D, z).normalize();
     }
 
     private boolean canOccupy(Location location) {
@@ -1056,6 +1098,12 @@ public final class ClaySoldierService {
         if( this.settings.nameplateShowRole() ) {
             nameplate = appendSpaceIfNeeded(nameplate, hasContent)
                     .append(Component.text(role.displayName(), role.textColor()));
+            hasContent = true;
+        }
+
+        if( brain(soldier).activeFormation.isActive() && !this.settings.nameplateFormationIndicator().isBlank() ) {
+            nameplate = appendSpaceIfNeeded(nameplate, hasContent)
+                    .append(Component.text(this.settings.nameplateFormationIndicator(), NamedTextColor.GOLD));
             hasContent = true;
         }
 
@@ -1363,6 +1411,7 @@ public final class ClaySoldierService {
         private UUID queuedTargetId;
         private AttackStyle queuedAttack;
         private AnimationState animation = AnimationState.IDLE;
+        private TacticalFormation activeFormation = TacticalFormation.NONE;
         private boolean movedThisTick;
 
         private void tick(int tickPeriod) {

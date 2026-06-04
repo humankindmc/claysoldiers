@@ -27,6 +27,7 @@
     show-team: true
     show-role: true
     show-health-text: true
+    formation-indicator: "[F]"
     health-bar-segments: 10
     healthy-threshold: 0.60
     low-threshold: 0.30
@@ -59,6 +60,10 @@
     skirmisher-wander-roll: 2
     wander-step-multiplier: 0.65
     close-combat-step-multiplier: 0.78
+    pathfinding-enabled: true
+    pathfinding-max-step-height: 1.0
+    pathfinding-side-step-multiplier: 0.90
+    pathfinding-back-step-multiplier: 0.60
 
   jumping:
     enabled: true
@@ -89,6 +94,7 @@
   formations:
     enabled: true
     tactical-enabled: true
+    sound-enabled: true
     # Tactical formations activate when at least this many same-team same-role soldiers are nearby.
     tactical-min-soldiers: 4
     tactical-scan-range: 8.0

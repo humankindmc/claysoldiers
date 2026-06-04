@@ -3,7 +3,7 @@ plugins {
 }
 
 group = "com.humankindgames"
-version = "0.4.1"
+version = "0.4.2"
 
 repositories {
     mavenCentral()
