@@ -333,6 +333,8 @@ public final class ClaySoldierService {
                 Optional<ArmorStand> nearestEnemy = findNearestEnemy(soldier, role);
                 if( nearestEnemy.isPresent() ) {
                     engage(soldier, nearestEnemy.get(), brain, role);
+                } else if( brain.activeFormation.isActive() ) {
+                    holdFormation(soldier, brain, role);
                 } else {
                     wander(soldier, brain, role);
                 }
@@ -413,15 +415,21 @@ public final class ClaySoldierService {
             return;
         }
 
-        if( this.settings.useFlanking() && brain.flankTicks <= 0 && this.random.nextDouble() < roleTuning.flankChance() * this.settings.flankChanceScale() ) {
+        if( tacticalFormation.isWall() ) {
+            brain.flankTicks = 0;
+        }
+
+        if( !tacticalFormation.isActive() && this.settings.useFlanking() && brain.flankTicks <= 0 && this.random.nextDouble() < roleTuning.flankChance() * this.settings.flankChanceScale() ) {
             brain.startFlank(this.random, this.settings);
         }
 
-        Location goal = brain.flankTicks > 0
+        Location goal = brain.flankTicks > 0 && !tacticalFormation.isActive()
                 ? flankPosition(soldier, target, brain)
                 : formationPosition(soldier, target, role, tacticalFormation);
         double step = this.settings.moveStep() * speedMultiplier(soldier, roleTuning);
-        if( tacticalFormation.isActive() ) {
+        if( tacticalFormation == TacticalFormation.SHIELD_WALL ) {
+            step *= this.settings.shieldWallSpeedMultiplier();
+        } else if( tacticalFormation.isActive() ) {
             step *= this.settings.tacticalFormationSpeedMultiplier();
         }
 
@@ -432,6 +440,34 @@ public final class ClaySoldierService {
         if( moveToward(soldier, goal, step) ) {
             brain.movedThisTick = true;
             maybeHop(soldier, this.settings.chaseJumpChance());
+            if( brain.animationTicks <= 0 ) {
+                brain.animation = AnimationState.RUN;
+                brain.animationTicks = this.settings.tickPeriodTicks() + 3;
+            }
+        }
+    }
+
+    private void holdFormation(ArmorStand soldier, SoldierBrain brain, ClaySoldierRole role) {
+        Optional<Location> centroid = formationCentroid(soldier, role);
+        if( centroid.isEmpty() ) {
+            return;
+        }
+
+        Location target = centroid.get();
+        faceDirection(soldier, horizontalDirection(soldier.getLocation(), target));
+        if( soldier.getLocation().distanceSquared(target) <= this.settings.shieldWallHoldRadius() * this.settings.shieldWallHoldRadius() ) {
+            return;
+        }
+
+        double step = this.settings.moveStep() * speedMultiplier(soldier, this.settings.role(role));
+        if( brain.activeFormation == TacticalFormation.SHIELD_WALL ) {
+            step *= this.settings.shieldWallSpeedMultiplier();
+        } else {
+            step *= this.settings.tacticalFormationSpeedMultiplier();
+        }
+
+        if( moveToward(soldier, target, step) ) {
+            brain.movedThisTick = true;
             if( brain.animationTicks <= 0 ) {
                 brain.animation = AnimationState.RUN;
                 brain.animationTicks = this.settings.tickPeriodTicks() + 3;
@@ -608,22 +644,28 @@ public final class ClaySoldierService {
         int center = columns / 2;
         int column = slot % columns - center;
         int row = slot / columns;
+        double lateralSpacing = tacticalFormation == TacticalFormation.SHIELD_WALL
+                ? this.settings.shieldWallLateralSpacing()
+                : this.settings.formationLateralSpacing();
+        double rowSpacing = tacticalFormation == TacticalFormation.SHIELD_WALL
+                ? this.settings.shieldWallRowSpacing()
+                : this.settings.formationRowSpacing();
 
         double distance = switch( tacticalFormation ) {
-            case SHIELD_WALL -> this.settings.shieldWallDistance() + row * this.settings.formationRowSpacing();
-            case SPEAR_WALL -> this.settings.spearWallDistance() + row * this.settings.formationRowSpacing();
-            case COMBINED_SPEAR_WALL, SUPPORT_HIDE -> this.settings.supportBehindWallDistance() + row * this.settings.formationRowSpacing();
-            case FLANK_SUPPORT -> this.settings.shieldWallDistance() + row * this.settings.formationRowSpacing();
+            case SHIELD_WALL -> this.settings.shieldWallDistance() + row * rowSpacing;
+            case SPEAR_WALL -> this.settings.spearWallDistance() + row * rowSpacing;
+            case COMBINED_SPEAR_WALL, SUPPORT_HIDE -> this.settings.supportBehindWallDistance() + row * rowSpacing;
+            case FLANK_SUPPORT -> this.settings.shieldWallDistance() + row * rowSpacing;
             case NONE -> this.settings.attackRange();
         };
 
         Location base = target.getLocation().clone().add(away.multiply(distance));
         if( tacticalFormation == TacticalFormation.FLANK_SUPPORT ) {
             int flankSide = slot % 2 == 0 ? 1 : -1;
-            return base.add(side.multiply(flankSide * (this.settings.flankProtectionWidth() + row * this.settings.formationLateralSpacing())));
+            return base.add(side.multiply(flankSide * (this.settings.flankProtectionWidth() + row * lateralSpacing)));
         }
 
-        return base.add(side.multiply(column * this.settings.formationLateralSpacing()));
+        return base.add(side.multiply(column * lateralSpacing));
     }
 
     private int formationSlot(ArmorStand soldier, ArmorStand target) {
@@ -644,6 +686,40 @@ public final class ClaySoldierService {
 
         int index = allies.indexOf(soldier);
         return Math.max(0, index);
+    }
+
+    private Optional<Location> formationCentroid(ArmorStand soldier, ClaySoldierRole role) {
+        Optional<ClayTeam> team = getTeam(soldier);
+        if( team.isEmpty() ) {
+            return Optional.empty();
+        }
+
+        double radiusSquared = this.settings.tacticalFormationScanRange() * this.settings.tacticalFormationScanRange();
+        List<ArmorStand> allies = this.activeSoldiers.stream()
+                .map(this.plugin.getServer()::getEntity)
+                .filter(ArmorStand.class::isInstance)
+                .map(ArmorStand.class::cast)
+                .filter(candidate -> !candidate.isDead() && candidate.getWorld().equals(soldier.getWorld()))
+                .filter(candidate -> getTeam(candidate).orElse(null) == team.get())
+                .filter(candidate -> getRole(candidate) == role)
+                .filter(candidate -> candidate.getLocation().distanceSquared(soldier.getLocation()) <= radiusSquared)
+                .toList();
+
+        if( allies.isEmpty() ) {
+            return Optional.empty();
+        }
+
+        double x = 0.0D;
+        double y = 0.0D;
+        double z = 0.0D;
+        for( ArmorStand ally : allies ) {
+            Location location = ally.getLocation();
+            x += location.getX();
+            y += location.getY();
+            z += location.getZ();
+        }
+
+        return Optional.of(new Location(soldier.getWorld(), x / allies.size(), y / allies.size(), z / allies.size()));
     }
 
     private TacticalFormation tacticalFormation(ArmorStand soldier, ClaySoldierRole role) {

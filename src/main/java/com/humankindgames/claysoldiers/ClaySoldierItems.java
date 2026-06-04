@@ -11,6 +11,7 @@ import org.bukkit.NamespacedKey;
 import org.bukkit.enchantments.Enchantment;
 import org.bukkit.inventory.ItemFlag;
 import org.bukkit.inventory.ItemStack;
+import org.bukkit.inventory.ShapelessRecipe;
 import org.bukkit.inventory.ShapedRecipe;
 import org.bukkit.inventory.meta.ItemMeta;
 import org.bukkit.inventory.meta.LeatherArmorMeta;
@@ -30,6 +31,7 @@ public final class ClaySoldierItems {
     private final NamespacedKey modifiersKey;
     private final NamespacedKey sourceTeamIdKey;
     private final NamespacedKey soldierDollRecipeKey;
+    private final NamespacedKey shapelessSoldierDollRecipeKey;
 
     public ClaySoldierItems(Plugin plugin, ClaySoldierSettings settings, ClaySoldierMessages messages) {
         this.plugin = plugin;
@@ -41,6 +43,7 @@ public final class ClaySoldierItems {
         this.modifiersKey = new NamespacedKey(plugin, "clay_modifiers");
         this.sourceTeamIdKey = new NamespacedKey(plugin, "clay_source_team_id");
         this.soldierDollRecipeKey = new NamespacedKey(plugin, "clay_soldier_doll");
+        this.shapelessSoldierDollRecipeKey = new NamespacedKey(plugin, "clay_soldier_doll_shapeless");
     }
 
     public NamespacedKey teamKey() {
@@ -185,6 +188,7 @@ public final class ClaySoldierItems {
 
     public void registerRecipes() {
         this.plugin.getServer().removeRecipe(this.soldierDollRecipeKey);
+        this.plugin.getServer().removeRecipe(this.shapelessSoldierDollRecipeKey);
 
         ShapedRecipe recipe = new ShapedRecipe(this.soldierDollRecipeKey, createSoldierDoll(ClayTeam.CLAY, ClaySoldierRole.WARRIOR, 4));
         recipe.shape("C", "S");
@@ -192,6 +196,11 @@ public final class ClaySoldierItems {
         recipe.setIngredient('S', Material.SOUL_SAND);
 
         this.plugin.getServer().addRecipe(recipe);
+
+        ShapelessRecipe shapelessRecipe = new ShapelessRecipe(this.shapelessSoldierDollRecipeKey, createSoldierDoll(ClayTeam.CLAY, ClaySoldierRole.WARRIOR, 4));
+        shapelessRecipe.addIngredient(Material.CLAY_BALL);
+        shapelessRecipe.addIngredient(Material.SOUL_SAND);
+        this.plugin.getServer().addRecipe(shapelessRecipe);
     }
 
     private Optional<ClaySoldierRole> roleUpgradeFor(Material material) {

@@ -99,9 +99,13 @@
     tactical-min-soldiers: 4
     tactical-scan-range: 8.0
     tactical-speed-multiplier: 0.82
+    shield-wall-speed-multiplier: 0.45
     tactical-damage-multiplier: 1.14
     special-attack-damage-multiplier: 1.35
     shield-wall-distance: 0.70
+    shield-wall-lateral-spacing: 0.34
+    shield-wall-row-spacing: 0.08
+    shield-wall-hold-radius: 0.55
     spear-wall-distance: 1.05
     support-behind-wall-distance: 1.65
     flank-protection-width: 1.85
