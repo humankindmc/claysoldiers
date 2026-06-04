@@ -77,6 +77,21 @@
     pathfinding-allow-one-block-step: true
     pathfinding-allow-stairs: true
     pathfinding-allow-slabs: true
+    pathfinding-planner-enabled: true
+    pathfinding-max-nodes: 750
+    pathfinding-max-range: 24.0
+    pathfinding-search-margin: 8
+    pathfinding-route-refresh-ticks: 12
+    pathfinding-route-target-move-threshold: 1.15
+    pathfinding-waypoint-reach-distance: 0.34
+    pathfinding-allow-diagonal: true
+    pathfinding-avoid-corner-cutting: true
+    pathfinding-max-drop-height: 1.0
+    pathfinding-heuristic-weight: 1.0
+    pathfinding-vertical-penalty: 0.35
+    pathfinding-smooth-routes: true
+    pathfinding-avoid-hazards: true
+    pathfinding-hazard-penalty: 6.0
     pathfinding-obstacle-probe-distance: 0.25
     pathfinding-detour-probe-distance: 0.58
     pathfinding-line-of-sight-probe-distance: 0.25

@@ -1,12 +1,15 @@
 package com.humankindgames.claysoldiers;
 
+import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
+import java.util.PriorityQueue;
 import java.util.Random;
 import java.util.Set;
 import java.util.UUID;
@@ -438,7 +441,7 @@ public final class ClaySoldierService {
             step *= this.settings.closeCombatStepMultiplier();
         }
 
-        if( moveToward(soldier, goal, step) ) {
+        if( moveToward(soldier, brain, goal, step) ) {
             brain.movedThisTick = true;
             maybeHop(soldier, this.settings.chaseJumpChance());
             if( brain.animationTicks <= 0 ) {
@@ -467,7 +470,7 @@ public final class ClaySoldierService {
             step *= this.settings.tacticalFormationSpeedMultiplier();
         }
 
-        if( moveToward(soldier, target, step) ) {
+        if( moveToward(soldier, brain, target, step) ) {
             brain.movedThisTick = true;
             if( brain.animationTicks <= 0 ) {
                 brain.animation = AnimationState.RUN;
@@ -580,7 +583,7 @@ public final class ClaySoldierService {
 
         double angle = this.random.nextDouble() * Math.PI * 2.0D;
         Location target = soldier.getLocation().clone().add(Math.cos(angle), 0.0D, Math.sin(angle));
-        if( moveToward(soldier, target, this.settings.moveStep() * speedMultiplier(soldier, this.settings.role(role)) * this.settings.wanderStepMultiplier()) ) {
+        if( moveToward(soldier, brain, target, this.settings.moveStep() * speedMultiplier(soldier, this.settings.role(role)) * this.settings.wanderStepMultiplier()) ) {
             brain.movedThisTick = true;
             maybeHop(soldier, this.settings.idleJumpChance());
             brain.animation = AnimationState.RUN;
@@ -948,7 +951,7 @@ public final class ClaySoldierService {
                 .toList();
     }
 
-    private boolean moveToward(ArmorStand soldier, Location target, double stepSize) {
+    private boolean moveToward(ArmorStand soldier, SoldierBrain brain, Location target, double stepSize) {
         Location current = soldier.getLocation();
         Vector direction = target.toVector().subtract(current.toVector());
         direction.setY(0.0D);
@@ -960,7 +963,9 @@ public final class ClaySoldierService {
         direction.normalize();
         Location next = current.clone().add(direction.clone().multiply(stepSize));
         next.setDirection(direction);
-        if( hasClearMovementPath(current, next) && moveTo(soldier, next) ) {
+        boolean directRouteClear = hasClearMovementPath(current, target);
+        if( directRouteClear && moveTo(soldier, next) ) {
+            brain.clearPath();
             return true;
         }
 
@@ -968,7 +973,357 @@ public final class ClaySoldierService {
             return false;
         }
 
+        if( this.settings.pathfindingPlannerEnabled() && followPlannedPath(soldier, brain, target, stepSize) ) {
+            return true;
+        }
+
+        brain.clearPath();
         return tryBlockedMovement(soldier, current, direction, stepSize);
+    }
+
+    private boolean followPlannedPath(ArmorStand soldier, SoldierBrain brain, Location target, double stepSize) {
+        if( needsNewPath(brain, target) ) {
+            Optional<List<Location>> plannedPath = planPath(soldier.getLocation(), target);
+            if( plannedPath.isEmpty() || plannedPath.get().isEmpty() ) {
+                brain.clearPath();
+                return false;
+            }
+
+            brain.path = plannedPath.get();
+            brain.pathIndex = 0;
+            brain.pathTarget = target.clone();
+            brain.pathRefreshTicks = this.settings.pathfindingRouteRefreshTicks();
+        }
+
+        Location current = soldier.getLocation();
+        advanceReachedWaypoints(brain, current);
+        if( brain.pathIndex >= brain.path.size() ) {
+            brain.clearPath();
+            return false;
+        }
+
+        if( this.settings.pathfindingSmoothRoutes() ) {
+            skipVisibleWaypoints(brain, current);
+        }
+
+        Location waypoint = brain.path.get(brain.pathIndex);
+        Vector direction = waypoint.toVector().subtract(current.toVector());
+        direction.setY(0.0D);
+        if( direction.lengthSquared() < MIN_MOVE_DISTANCE_SQUARED ) {
+            brain.pathIndex++;
+            return brain.pathIndex < brain.path.size();
+        }
+
+        direction.normalize();
+        double distance = current.distance(waypoint);
+        Location next = current.clone().add(direction.clone().multiply(Math.min(stepSize, distance)));
+        next.setY(current.getY() + Math.max(-this.settings.pathfindingMaxDropHeight(), Math.min(this.settings.pathfindingMaxStepHeight(), waypoint.getY() - current.getY())));
+        next.setDirection(direction);
+
+        if( !hasClearMovementPath(current, next, true) || !moveTo(soldier, next) ) {
+            brain.clearPath();
+            return false;
+        }
+
+        return true;
+    }
+
+    private boolean needsNewPath(SoldierBrain brain, Location target) {
+        if( brain.path.isEmpty() || brain.pathIndex >= brain.path.size() || brain.pathTarget == null ) {
+            return true;
+        }
+        if( brain.pathRefreshTicks <= 0 ) {
+            return true;
+        }
+        if( !brain.pathTarget.getWorld().equals(target.getWorld()) ) {
+            return true;
+        }
+
+        double threshold = this.settings.pathfindingRouteTargetMoveThreshold();
+        return brain.pathTarget.distanceSquared(target) > threshold * threshold;
+    }
+
+    private void advanceReachedWaypoints(SoldierBrain brain, Location current) {
+        double reachDistanceSquared = this.settings.pathfindingWaypointReachDistance() * this.settings.pathfindingWaypointReachDistance();
+        while( brain.pathIndex < brain.path.size() && current.distanceSquared(brain.path.get(brain.pathIndex)) <= reachDistanceSquared ) {
+            brain.pathIndex++;
+        }
+    }
+
+    private void skipVisibleWaypoints(SoldierBrain brain, Location current) {
+        for( int index = brain.path.size() - 1; index > brain.pathIndex; index-- ) {
+            if( hasClearMovementPath(current, brain.path.get(index)) ) {
+                brain.pathIndex = index;
+                return;
+            }
+        }
+    }
+
+    private Optional<List<Location>> planPath(Location start, Location target) {
+        if( !start.getWorld().equals(target.getWorld()) ) {
+            return Optional.empty();
+        }
+
+        double maxRange = this.settings.pathfindingMaxRange();
+        Location plannedTarget = clampPathTarget(start, target, maxRange);
+        World world = start.getWorld();
+        Optional<PathNode> startNode = nearestPathNode(start, start.getY(), 1);
+        if( startNode.isEmpty() ) {
+            return Optional.empty();
+        }
+
+        Optional<PathNode> goalNode = nearestPathNode(plannedTarget, startNode.get().y(), 3);
+        if( goalNode.isEmpty() ) {
+            return Optional.empty();
+        }
+
+        if( startNode.get().equals(goalNode.get()) ) {
+            return Optional.empty();
+        }
+
+        PriorityQueue<PathSearchNode> open = new PriorityQueue<>(Comparator.comparingDouble(node -> node.fCost));
+        Map<PathNode, PathSearchNode> allNodes = new HashMap<>();
+        Set<PathNode> closed = new HashSet<>();
+        PathSearchNode first = new PathSearchNode(startNode.get(), null, 0.0D, pathHeuristic(startNode.get(), goalNode.get()));
+        open.add(first);
+        allNodes.put(first.node, first);
+
+        int visited = 0;
+        while( !open.isEmpty() && visited++ < this.settings.pathfindingMaxNodes() ) {
+            PathSearchNode current = open.poll();
+            if( !closed.add(current.node) ) {
+                continue;
+            }
+
+            if( current.node.equals(goalNode.get()) ) {
+                return Optional.of(pathLocations(world, current));
+            }
+
+            for( PathNode neighbor : pathNeighbors(world, current.node) ) {
+                if( closed.contains(neighbor) || exceedsPathRange(startNode.get(), goalNode.get(), neighbor, maxRange) ) {
+                    continue;
+                }
+
+                double cost = current.gCost + pathMoveCost(world, current.node, neighbor);
+                PathSearchNode known = allNodes.get(neighbor);
+                if( known != null && cost >= known.gCost ) {
+                    continue;
+                }
+
+                PathSearchNode next = new PathSearchNode(neighbor, current, cost, cost + pathHeuristic(neighbor, goalNode.get()));
+                allNodes.put(neighbor, next);
+                open.add(next);
+            }
+        }
+
+        return Optional.empty();
+    }
+
+    private Location clampPathTarget(Location start, Location target, double maxRange) {
+        Vector delta = target.toVector().subtract(start.toVector());
+        delta.setY(0.0D);
+        if( delta.length() <= maxRange ) {
+            return target;
+        }
+
+        Vector direction = delta.normalize().multiply(maxRange);
+        return start.clone().add(direction);
+    }
+
+    private Optional<PathNode> nearestPathNode(Location location, double referenceY, int radius) {
+        World world = location.getWorld();
+        int centerX = location.getBlockX();
+        int centerZ = location.getBlockZ();
+        for( int currentRadius = 0; currentRadius <= radius; currentRadius++ ) {
+            Optional<PathNode> closest = Optional.empty();
+            double closestDistanceSquared = Double.MAX_VALUE;
+            for( int dx = -currentRadius; dx <= currentRadius; dx++ ) {
+                for( int dz = -currentRadius; dz <= currentRadius; dz++ ) {
+                    if( Math.max(Math.abs(dx), Math.abs(dz)) != currentRadius ) {
+                        continue;
+                    }
+
+                    Optional<PathNode> node = walkablePathNodeAt(world, centerX + dx, centerZ + dz, referenceY);
+                    if( node.isEmpty() ) {
+                        continue;
+                    }
+
+                    double distanceSquared = nodeLocation(world, node.get()).distanceSquared(location);
+                    if( distanceSquared < closestDistanceSquared ) {
+                        closest = node;
+                        closestDistanceSquared = distanceSquared;
+                    }
+                }
+            }
+
+            if( closest.isPresent() ) {
+                return closest;
+            }
+        }
+
+        return Optional.empty();
+    }
+
+    private List<PathNode> pathNeighbors(World world, PathNode node) {
+        int[][] directions = this.settings.pathfindingAllowDiagonal()
+                ? new int[][] {{1, 0}, {-1, 0}, {0, 1}, {0, -1}, {1, 1}, {1, -1}, {-1, 1}, {-1, -1}}
+                : new int[][] {{1, 0}, {-1, 0}, {0, 1}, {0, -1}};
+        List<PathNode> neighbors = new ArrayList<>(directions.length);
+        double currentY = node.y();
+
+        for( int[] direction : directions ) {
+            int dx = direction[0];
+            int dz = direction[1];
+            Optional<PathNode> neighbor = walkablePathNodeAt(world, node.x + dx, node.z + dz, currentY);
+            if( neighbor.isEmpty() || !canTraverseHeight(currentY, neighbor.get().y()) ) {
+                continue;
+            }
+
+            if( dx != 0 && dz != 0 && this.settings.pathfindingAvoidCornerCutting()
+                    && (!walkablePathNodeAt(world, node.x + dx, node.z, currentY).filter(candidate -> canTraverseHeight(currentY, candidate.y())).isPresent()
+                    || !walkablePathNodeAt(world, node.x, node.z + dz, currentY).filter(candidate -> canTraverseHeight(currentY, candidate.y())).isPresent()) ) {
+                continue;
+            }
+
+            if( !hasClearMovementPath(nodeLocation(world, node), nodeLocation(world, neighbor.get()), true) ) {
+                continue;
+            }
+
+            neighbors.add(neighbor.get());
+        }
+
+        return neighbors;
+    }
+
+    private Optional<PathNode> walkablePathNodeAt(World world, int x, int z, double referenceY) {
+        int referenceHalf = (int) Math.round(referenceY * 2.0D);
+        int maxUp = Math.max(0, (int) Math.ceil(this.settings.pathfindingMaxStepHeight() * 2.0D));
+        int maxDown = Math.max(0, (int) Math.ceil(this.settings.pathfindingMaxDropHeight() * 2.0D));
+
+        for( int offset : orderedHeightOffsets(maxUp, maxDown) ) {
+            int yHalf = referenceHalf + offset;
+            double y = yHalf / 2.0D;
+            if( y < world.getMinHeight() || y > world.getMaxHeight() - 2 ) {
+                continue;
+            }
+
+            PathNode node = new PathNode(x, yHalf, z);
+            Location location = nodeLocation(world, node);
+            if( isPathWalkableLocation(location) ) {
+                return Optional.of(node);
+            }
+        }
+
+        return Optional.empty();
+    }
+
+    private List<Integer> orderedHeightOffsets(int maxUp, int maxDown) {
+        List<Integer> offsets = new ArrayList<>(maxUp + maxDown + 1);
+        offsets.add(0);
+        int max = Math.max(maxUp, maxDown);
+        for( int step = 1; step <= max; step++ ) {
+            if( step <= maxUp ) {
+                offsets.add(step);
+            }
+            if( step <= maxDown ) {
+                offsets.add(-step);
+            }
+        }
+
+        return offsets;
+    }
+
+    private boolean canTraverseHeight(double fromY, double toY) {
+        return toY - fromY <= this.settings.pathfindingMaxStepHeight() + 0.01D
+                && fromY - toY <= this.settings.pathfindingMaxDropHeight() + 0.01D;
+    }
+
+    private boolean exceedsPathRange(PathNode start, PathNode goal, PathNode candidate, double maxRange) {
+        int margin = this.settings.pathfindingSearchMargin();
+        int minX = Math.min(start.x, goal.x) - margin;
+        int maxX = Math.max(start.x, goal.x) + margin;
+        int minZ = Math.min(start.z, goal.z) - margin;
+        int maxZ = Math.max(start.z, goal.z) + margin;
+        if( candidate.x < minX || candidate.x > maxX || candidate.z < minZ || candidate.z > maxZ ) {
+            return true;
+        }
+
+        double dx = candidate.x - start.x;
+        double dz = candidate.z - start.z;
+        return dx * dx + dz * dz > maxRange * maxRange;
+    }
+
+    private double pathMoveCost(World world, PathNode from, PathNode to) {
+        double dx = Math.abs(to.x - from.x);
+        double dz = Math.abs(to.z - from.z);
+        double baseCost = dx != 0.0D && dz != 0.0D ? Math.sqrt(2.0D) : 1.0D;
+        double verticalCost = Math.abs(to.y() - from.y()) * this.settings.pathfindingVerticalPenalty();
+        return baseCost + verticalCost + pathHazardCost(world, to);
+    }
+
+    private double pathHeuristic(PathNode from, PathNode to) {
+        double dx = Math.abs(from.x - to.x);
+        double dz = Math.abs(from.z - to.z);
+        double diagonal = Math.min(dx, dz);
+        double straight = Math.max(dx, dz) - diagonal;
+        double y = Math.abs(from.y() - to.y()) * this.settings.pathfindingVerticalPenalty();
+        return (diagonal * Math.sqrt(2.0D) + straight + y) * this.settings.pathfindingHeuristicWeight();
+    }
+
+    private List<Location> pathLocations(World world, PathSearchNode endNode) {
+        List<Location> locations = new ArrayList<>();
+        PathSearchNode cursor = endNode;
+        while( cursor != null ) {
+            locations.add(nodeLocation(world, cursor.node));
+            cursor = cursor.parent;
+        }
+
+        Collections.reverse(locations);
+        if( !locations.isEmpty() ) {
+            locations.remove(0);
+        }
+
+        return locations;
+    }
+
+    private Location nodeLocation(World world, PathNode node) {
+        return new Location(world, node.x + 0.5D, node.y(), node.z + 0.5D);
+    }
+
+    private boolean isPathWalkableLocation(Location location) {
+        return canOccupy(location) && hasStandingSurface(location);
+    }
+
+    private boolean hasStandingSurface(Location location) {
+        Block feet = location.getBlock();
+        if( isPartialStepBlock(feet) && location.getY() + 0.02D >= blockSurfaceY(feet) && location.getY() < feet.getY() + 1.0D ) {
+            return true;
+        }
+
+        Block below = location.clone().subtract(0.0D, 0.05D, 0.0D).getBlock();
+        return !below.isPassable() || isPartialStepBlock(below);
+    }
+
+    private double pathHazardCost(World world, PathNode node) {
+        if( !this.settings.pathfindingAvoidHazards() ) {
+            return 0.0D;
+        }
+
+        return hasPathHazard(nodeLocation(world, node)) ? this.settings.pathfindingHazardPenalty() : 0.0D;
+    }
+
+    private boolean hasPathHazard(Location location) {
+        Block feet = location.getBlock();
+        Block below = location.clone().subtract(0.0D, 0.05D, 0.0D).getBlock();
+        Block head = location.clone().add(0.0D, 1.0D, 0.0D).getBlock();
+        return isHazard(feet.getType()) || isHazard(below.getType()) || isHazard(head.getType());
+    }
+
+    private boolean isHazard(Material material) {
+        return switch( material ) {
+            case LAVA, FIRE, SOUL_FIRE, MAGMA_BLOCK, CACTUS, CAMPFIRE, SOUL_CAMPFIRE -> true;
+            default -> false;
+        };
     }
 
     private boolean moveTo(ArmorStand soldier, Location location) {
@@ -1089,6 +1444,10 @@ public final class ClaySoldierService {
     }
 
     private boolean hasClearMovementPath(Location from, Location to) {
+        return hasClearMovementPath(from, to, false);
+    }
+
+    private boolean hasClearMovementPath(Location from, Location to, boolean allowHazards) {
         if( !this.settings.pathfindingEnabled() ) {
             return true;
         }
@@ -1103,6 +1462,9 @@ public final class ClaySoldierService {
         Vector step = delta.multiply(1.0D / samples);
         for( int i = 1; i <= samples; i++ ) {
             Location sample = from.clone().add(step.clone().multiply(i));
+            if( !allowHazards && this.settings.pathfindingAvoidHazards() && hasPathHazard(sample) ) {
+                return false;
+            }
             if( canOccupy(sample) || resolveStepLocation(from, sample).isPresent() ) {
                 continue;
             }
@@ -1624,6 +1986,26 @@ public final class ClaySoldierService {
         }
     }
 
+    private record PathNode(int x, int yHalf, int z) {
+        private double y() {
+            return this.yHalf / 2.0D;
+        }
+    }
+
+    private static final class PathSearchNode {
+        private final PathNode node;
+        private final PathSearchNode parent;
+        private final double gCost;
+        private final double fCost;
+
+        private PathSearchNode(PathNode node, PathSearchNode parent, double gCost, double fCost) {
+            this.node = node;
+            this.parent = parent;
+            this.gCost = gCost;
+            this.fCost = fCost;
+        }
+    }
+
     private static final class SoldierBrain {
         private int attackCooldownTicks;
         private int dodgeCooldownTicks;
@@ -1636,12 +2018,17 @@ public final class ClaySoldierService {
         private AnimationState animation = AnimationState.IDLE;
         private TacticalFormation activeFormation = TacticalFormation.NONE;
         private boolean movedThisTick;
+        private List<Location> path = List.of();
+        private int pathIndex;
+        private Location pathTarget;
+        private int pathRefreshTicks;
 
         private void tick(int tickPeriod) {
             this.attackCooldownTicks = Math.max(0, this.attackCooldownTicks - tickPeriod);
             this.dodgeCooldownTicks = Math.max(0, this.dodgeCooldownTicks - tickPeriod);
             this.animationTicks = Math.max(0, this.animationTicks - tickPeriod);
             this.flankTicks = Math.max(0, this.flankTicks - tickPeriod);
+            this.pathRefreshTicks = Math.max(0, this.pathRefreshTicks - tickPeriod);
 
             if( this.animationTicks == 0 && this.windupTicks <= 0 ) {
                 this.animation = AnimationState.IDLE;
@@ -1657,6 +2044,13 @@ public final class ClaySoldierService {
             this.queuedTargetId = null;
             this.queuedAttack = null;
             this.windupTicks = 0;
+        }
+
+        private void clearPath() {
+            this.path = List.of();
+            this.pathIndex = 0;
+            this.pathTarget = null;
+            this.pathRefreshTicks = 0;
         }
     }
 }
