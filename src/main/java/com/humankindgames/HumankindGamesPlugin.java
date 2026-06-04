@@ -2,6 +2,7 @@ package com.humankindgames;
 
 import com.humankindgames.claysoldiers.ClaySoldierItems;
 import com.humankindgames.claysoldiers.ClaySoldierListener;
+import com.humankindgames.claysoldiers.ClaySoldierMessages;
 import com.humankindgames.claysoldiers.ClaySoldierService;
 import com.humankindgames.claysoldiers.ClaySoldierSettings;
 import com.humankindgames.claysoldiers.ClaySoldiersCommand;
@@ -19,18 +20,19 @@ public final class HumankindGamesPlugin
         saveDefaultConfig();
 
         ClaySoldierSettings settings = ClaySoldierSettings.from(getConfig());
-        this.claySoldierItems = new ClaySoldierItems(this, settings);
+        ClaySoldierMessages messages = new ClaySoldierMessages(this);
+        this.claySoldierItems = new ClaySoldierItems(this, settings, messages);
         this.claySoldierService = new ClaySoldierService(this, this.claySoldierItems, settings);
 
         this.claySoldierItems.registerRecipes();
         this.claySoldierService.start();
 
         getServer().getPluginManager().registerEvents(
-                new ClaySoldierListener(this.claySoldierItems, this.claySoldierService, settings),
+                new ClaySoldierListener(this.claySoldierItems, this.claySoldierService, settings, messages),
                 this
         );
 
-        ClaySoldiersCommand claySoldiersCommand = new ClaySoldiersCommand(this.claySoldierItems, this.claySoldierService);
+        ClaySoldiersCommand claySoldiersCommand = new ClaySoldiersCommand(this.claySoldierItems, this.claySoldierService, messages);
         PluginCommand command = Objects.requireNonNull(getCommand("claysoldiers"), "claysoldiers command missing from plugin.yml");
         command.setExecutor(claySoldiersCommand);
         command.setTabCompleter(claySoldiersCommand);

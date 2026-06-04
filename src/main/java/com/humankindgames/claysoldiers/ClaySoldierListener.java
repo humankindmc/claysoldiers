@@ -1,6 +1,9 @@
 package com.humankindgames.claysoldiers;
 
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Optional;
+import java.util.Map;
 import java.util.logging.Level;
 import org.bukkit.GameMode;
 import org.bukkit.Location;
@@ -16,6 +19,7 @@ import org.bukkit.event.block.Action;
 import org.bukkit.event.entity.EntityDamageByEntityEvent;
 import org.bukkit.event.entity.EntityDamageEvent;
 import org.bukkit.event.inventory.InventoryCreativeEvent;
+import org.bukkit.event.inventory.PrepareItemCraftEvent;
 import org.bukkit.event.player.PlayerArmorStandManipulateEvent;
 import org.bukkit.event.player.PlayerInteractAtEntityEvent;
 import org.bukkit.event.player.PlayerInteractEvent;
@@ -26,16 +30,16 @@ import org.bukkit.util.Vector;
 
 public final class ClaySoldierListener
         implements Listener {
-    private static final String SPAWN_FAILURE_MESSAGE = "Clay soldier spawn failed. Check the server console for the stack trace.";
-
     private final ClaySoldierItems items;
     private final ClaySoldierService soldiers;
     private final ClaySoldierSettings settings;
+    private final ClaySoldierMessages messages;
 
-    public ClaySoldierListener(ClaySoldierItems items, ClaySoldierService soldiers, ClaySoldierSettings settings) {
+    public ClaySoldierListener(ClaySoldierItems items, ClaySoldierService soldiers, ClaySoldierSettings settings, ClaySoldierMessages messages) {
         this.items = items;
         this.soldiers = soldiers;
         this.settings = settings;
+        this.messages = messages;
     }
 
     @EventHandler(priority = EventPriority.HIGH)
@@ -61,12 +65,16 @@ public final class ClaySoldierListener
         int requestedCount = player.isSneaking() ? 1 : item.getAmount();
         int spawnCount = Math.max(1, Math.min(this.settings.maxSpawnPerUse(), requestedCount));
         ClaySoldierRole role = this.items.getDollRole(item);
+        if( !this.soldiers.canSpawnSoldiers(spawnLocation.get(), spawnCount) ) {
+            sendSpawnLimitMessage(player, spawnLocation.get());
+            return;
+        }
 
         try {
-            this.soldiers.spawnSoldiers(team.get(), role, spawnLocation.get(), spawnCount);
+            this.soldiers.spawnSoldiers(team.get(), role, spawnLocation.get(), spawnCount, this.items.getDollModifiers(item));
         } catch( RuntimeException ex ) {
-            player.sendMessage(SPAWN_FAILURE_MESSAGE);
-            this.soldiers.plugin().getLogger().log(Level.SEVERE, "Failed to spawn clay soldier from doll", ex);
+            player.sendMessage(this.messages.component("commands.spawn-failure-player"));
+            this.soldiers.plugin().getLogger().log(Level.SEVERE, this.messages.plain("commands.spawn-failure-log-doll"), ex);
             return;
         }
 
@@ -84,6 +92,7 @@ public final class ClaySoldierListener
 
         event.setCancelled(true);
         if( !(event instanceof EntityDamageByEntityEvent damageByEntity) ) {
+            environmentalDamage(event).ifPresent(damage -> this.soldiers.damageSoldier(soldier, damage));
             return;
         }
 
@@ -96,6 +105,15 @@ public final class ClaySoldierListener
         }
 
         this.soldiers.damageSoldier(soldier, damage, attacker);
+    }
+
+    private Optional<Double> environmentalDamage(EntityDamageEvent event) {
+        return switch( event.getCause() ) {
+            case FIRE, FIRE_TICK -> Optional.of(this.settings.fireDamage());
+            case LAVA -> Optional.of(this.settings.lavaDamage());
+            case HOT_FLOOR -> Optional.of(this.settings.hotFloorDamage());
+            default -> Optional.empty();
+        };
     }
 
     @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
@@ -116,6 +134,51 @@ public final class ClaySoldierListener
     public void onCreativeInventory(InventoryCreativeEvent event) {
         if( this.items.isSoldierDoll(event.getCursor()) ) {
             event.getCursor().setAmount(Math.min(event.getCursor().getAmount(), this.settings.dollStackSize()));
+        }
+    }
+
+    @EventHandler
+    public void onPrepareCraft(PrepareItemCraftEvent event) {
+        ItemStack doll = null;
+        ItemStack ingredient = null;
+        List<ItemStack> ingredients = new ArrayList<>();
+
+        for( ItemStack item : event.getInventory().getMatrix() ) {
+            if( item == null || item.getType().isAir() ) {
+                continue;
+            }
+
+            ingredients.add(item);
+
+            if( this.items.isSoldierDoll(item) ) {
+                if( doll != null ) {
+                    event.getInventory().setResult(null);
+                    return;
+                }
+                doll = item;
+                continue;
+            }
+        }
+
+        if( doll != null ) {
+            for( ItemStack item : ingredients ) {
+                if( !this.items.isSoldierDoll(item) ) {
+                    if( ingredient != null ) {
+                        event.getInventory().setResult(null);
+                        return;
+                    }
+                    ingredient = item;
+                }
+            }
+        }
+
+        Optional<ItemStack> result = this.items.createCraftingResult(doll, ingredient);
+        if( result.isPresent() ) {
+            event.getInventory().setResult(result.get());
+        } else if( doll != null ) {
+            event.getInventory().setResult(null);
+        } else {
+            this.items.createBaseDollCraftingResult(ingredients).ifPresent(event.getInventory()::setResult);
         }
     }
 
@@ -165,5 +228,17 @@ public final class ClaySoldierListener
 
         item.setAmount(remaining);
         player.getInventory().setItemInMainHand(item);
+    }
+
+    private void sendSpawnLimitMessage(Player player, Location location) {
+        player.sendMessage(this.messages.component("commands.spawn-limit-reached", Map.of(
+                "limit", Integer.toString(this.settings.spawnLimitMaxSoldiers()),
+                "radius", formatNumber(this.settings.spawnLimitRadius()),
+                "current", Integer.toString(this.soldiers.nearbySoldierCount(location))
+        )));
+    }
+
+    private String formatNumber(double value) {
+        return Math.rint(value) == value ? Long.toString(Math.round(value)) : Double.toString(value);
     }
 }

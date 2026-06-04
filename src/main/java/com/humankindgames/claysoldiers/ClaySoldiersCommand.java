@@ -4,11 +4,10 @@ import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Optional;
 import java.util.logging.Level;
 import java.util.stream.Stream;
-import net.kyori.adventure.text.Component;
-import net.kyori.adventure.text.format.NamedTextColor;
 import org.bukkit.Bukkit;
 import org.bukkit.Location;
 import org.bukkit.command.Command;
@@ -24,20 +23,21 @@ import org.jetbrains.annotations.Nullable;
 public final class ClaySoldiersCommand
         implements CommandExecutor, TabCompleter {
     private static final String PERMISSION = "humankindgames.claysoldiers";
-    private static final String SPAWN_FAILURE_MESSAGE = "Clay soldier spawn failed. Check the server console for the stack trace.";
 
     private final ClaySoldierItems items;
     private final ClaySoldierService soldiers;
+    private final ClaySoldierMessages messages;
 
-    public ClaySoldiersCommand(ClaySoldierItems items, ClaySoldierService soldiers) {
+    public ClaySoldiersCommand(ClaySoldierItems items, ClaySoldierService soldiers, ClaySoldierMessages messages) {
         this.items = items;
         this.soldiers = soldiers;
+        this.messages = messages;
     }
 
     @Override
     public boolean onCommand(@NotNull CommandSender sender, @NotNull Command command, @NotNull String label, @NotNull String[] args) {
         if( !sender.hasPermission(PERMISSION) ) {
-            sender.sendMessage(Component.text("You do not have permission to use this command.", NamedTextColor.RED));
+            sender.sendMessage(this.messages.component("commands.no-permission"));
             return true;
         }
 
@@ -52,7 +52,7 @@ public final class ClaySoldiersCommand
             case "clear" -> clear(sender, args);
             case "teams" -> teams(sender);
             case "roles" -> roles(sender);
-            case "count" -> sender.sendMessage(Component.text("Active clay soldiers: " + this.soldiers.activeCount(), NamedTextColor.YELLOW));
+            case "count" -> sender.sendMessage(this.messages.component("commands.active-count", Map.of("count", Integer.toString(this.soldiers.activeCount()))));
             default -> sendHelp(sender, label);
         }
 
@@ -85,26 +85,26 @@ public final class ClaySoldiersCommand
 
     private void give(CommandSender sender, String[] args) {
         if( args.length < 2 ) {
-            sender.sendMessage(Component.text("Usage: /claysoldiers give <team> [amount] [player]", NamedTextColor.RED));
+            sender.sendMessage(this.messages.component("commands.usage-give"));
             return;
         }
 
         Optional<ClayTeam> team = ClayTeam.fromKey(args[1]);
         if( team.isEmpty() ) {
-            sender.sendMessage(Component.text("Unknown clay soldier team: " + args[1], NamedTextColor.RED));
+            sender.sendMessage(this.messages.component("commands.unknown-team", Map.of("team", args[1])));
             return;
         }
 
         ParsedOptions options = parseOptions(sender, args, 2, 16);
         if( options.error() != null ) {
-            sender.sendMessage(Component.text(options.error(), NamedTextColor.RED));
+            sender.sendMessage(this.messages.component(options.error(), options.errorPlaceholders()));
             return;
         }
 
         int amount = options.amount();
         Player target = options.target();
         if( target == null ) {
-            sender.sendMessage(Component.text("Specify a target player when running from console.", NamedTextColor.RED));
+            sender.sendMessage(this.messages.component("commands.console-target-required"));
             return;
         }
 
@@ -116,71 +116,98 @@ public final class ClaySoldiersCommand
             remaining -= stackAmount;
         }
 
-        sender.sendMessage(Component.text("Gave " + amount + " " + team.get().displayName() + " " + options.role().displayName()
-                + " doll(s) to " + target.getName() + ".", NamedTextColor.GREEN));
+        sender.sendMessage(this.messages.component("commands.give-success", Map.of(
+                "amount", Integer.toString(amount),
+                "team", team.get().displayName(),
+                "role", options.role().displayName(),
+                "player", target.getName()
+        )));
     }
 
     private void spawn(CommandSender sender, String[] args) {
         if( !(sender instanceof Player player) ) {
-            sender.sendMessage(Component.text("Only players can use /claysoldiers spawn.", NamedTextColor.RED));
+            sender.sendMessage(this.messages.component("commands.console-spawn-only"));
             return;
         }
 
         if( args.length < 2 ) {
-            sender.sendMessage(Component.text("Usage: /claysoldiers spawn <team> [amount]", NamedTextColor.RED));
+            sender.sendMessage(this.messages.component("commands.usage-spawn"));
             return;
         }
 
         Optional<ClayTeam> team = ClayTeam.fromKey(args[1]);
         if( team.isEmpty() ) {
-            sender.sendMessage(Component.text("Unknown clay soldier team: " + args[1], NamedTextColor.RED));
+            sender.sendMessage(this.messages.component("commands.unknown-team", Map.of("team", args[1])));
             return;
         }
 
         ParsedOptions options = parseOptions(sender, args, 2, 1);
         if( options.error() != null ) {
-            sender.sendMessage(Component.text(options.error(), NamedTextColor.RED));
+            sender.sendMessage(this.messages.component(options.error(), options.errorPlaceholders()));
             return;
         }
 
         int amount = options.amount();
         Location location = player.getLocation().clone().add(horizontalDirection(player).multiply(1.8D));
         location.setY(player.getLocation().getY());
+        if( !this.soldiers.canSpawnSoldiers(location, amount) ) {
+            sender.sendMessage(this.messages.component("commands.spawn-limit-reached", Map.of(
+                    "limit", Integer.toString(this.soldiers.spawnLimitMaxSoldiers()),
+                    "radius", formatNumber(this.soldiers.spawnLimitRadius()),
+                    "current", Integer.toString(this.soldiers.nearbySoldierCount(location))
+            )));
+            return;
+        }
 
         try {
             this.soldiers.spawnSoldiers(team.get(), options.role(), location, amount);
         } catch( RuntimeException ex ) {
-            sender.sendMessage(Component.text(SPAWN_FAILURE_MESSAGE, NamedTextColor.RED));
-            this.soldiers.plugin().getLogger().log(Level.SEVERE, "Failed to spawn clay soldier from command", ex);
+            sender.sendMessage(this.messages.component("commands.spawn-failure-player"));
+            this.soldiers.plugin().getLogger().log(Level.SEVERE, this.messages.plain("commands.spawn-failure-log-command"), ex);
             return;
         }
 
-        sender.sendMessage(Component.text("Spawned " + amount + " " + team.get().displayName() + " " + options.role().displayName()
-                + " soldier(s).", NamedTextColor.GREEN));
+        sender.sendMessage(this.messages.component("commands.spawn-success", Map.of(
+                "amount", Integer.toString(amount),
+                "team", team.get().displayName(),
+                "role", options.role().displayName()
+        )));
     }
 
     private void clear(CommandSender sender, String[] args) {
         if( !(sender instanceof Player player) ) {
-            sender.sendMessage(Component.text("Only players can clear nearby clay soldiers.", NamedTextColor.RED));
+            sender.sendMessage(this.messages.component("commands.console-clear-only"));
             return;
         }
 
         int radius = parseInt(args, 1, 32, 1, 512);
         int removed = this.soldiers.clearSoldiers(player.getLocation(), radius);
-        sender.sendMessage(Component.text("Removed " + removed + " clay soldier(s) within " + radius + " blocks.", NamedTextColor.YELLOW));
+        sender.sendMessage(this.messages.component("commands.clear-success", Map.of(
+                "amount", Integer.toString(removed),
+                "radius", Integer.toString(radius)
+        )));
     }
 
     private void teams(CommandSender sender) {
-        sender.sendMessage(Component.text("Clay soldier teams:", NamedTextColor.YELLOW));
+        sender.sendMessage(this.messages.component("commands.teams-header"));
         for( ClayTeam team : ClayTeam.values() ) {
-            sender.sendMessage(Component.text(" - " + team.key() + " (" + team.displayName() + ")", team.textColor()));
+            sender.sendMessage(this.messages.component("commands.team-line", Map.of(
+                    "key", team.key(),
+                    "team", team.displayName(),
+                    "team_color", ClaySoldierMessages.colorCode(team.textColor())
+            )));
         }
     }
 
     private void roles(CommandSender sender) {
-        sender.sendMessage(Component.text("Clay soldier roles:", NamedTextColor.YELLOW));
+        sender.sendMessage(this.messages.component("commands.roles-header"));
         for( ClaySoldierRole role : ClaySoldierRole.values() ) {
-            sender.sendMessage(Component.text(" - " + role.key() + " (" + role.displayName() + "): " + role.description(), role.textColor()));
+            sender.sendMessage(this.messages.component("commands.role-line", Map.of(
+                    "key", role.key(),
+                    "role", role.displayName(),
+                    "role_color", ClaySoldierMessages.colorCode(role.textColor()),
+                    "description", role.description()
+            )));
         }
     }
 
@@ -231,10 +258,10 @@ public final class ClaySoldiersCommand
                 continue;
             }
 
-            return new ParsedOptions(amount, role, target, "Unknown option: " + value);
+            return new ParsedOptions(amount, role, target, "commands.unknown-option", Map.of("option", value));
         }
 
-        return new ParsedOptions(amount, role, target, null);
+        return new ParsedOptions(amount, role, target, null, Map.of());
     }
 
     private List<String> complete(String input, Stream<String> options) {
@@ -254,16 +281,21 @@ public final class ClaySoldiersCommand
     }
 
     private void sendHelp(CommandSender sender, String label) {
-        sender.sendMessage(Component.text("HumankindGames Clay Soldiers", NamedTextColor.YELLOW));
-        sender.sendMessage(Component.text("/" + label + " give <team> [amount] [player]", NamedTextColor.GRAY));
-        sender.sendMessage(Component.text("/" + label + " give <team> [role] [amount] [player]", NamedTextColor.GRAY));
-        sender.sendMessage(Component.text("/" + label + " spawn <team> [amount] [role]", NamedTextColor.GRAY));
-        sender.sendMessage(Component.text("/" + label + " clear [radius]", NamedTextColor.GRAY));
-        sender.sendMessage(Component.text("/" + label + " teams", NamedTextColor.GRAY));
-        sender.sendMessage(Component.text("/" + label + " roles", NamedTextColor.GRAY));
-        sender.sendMessage(Component.text("/" + label + " count", NamedTextColor.GRAY));
+        Map<String, String> placeholders = Map.of("label", label);
+        sender.sendMessage(this.messages.component("commands.help-header", placeholders));
+        sender.sendMessage(this.messages.component("commands.help-give", placeholders));
+        sender.sendMessage(this.messages.component("commands.help-give-role", placeholders));
+        sender.sendMessage(this.messages.component("commands.help-spawn", placeholders));
+        sender.sendMessage(this.messages.component("commands.help-clear", placeholders));
+        sender.sendMessage(this.messages.component("commands.help-teams", placeholders));
+        sender.sendMessage(this.messages.component("commands.help-roles", placeholders));
+        sender.sendMessage(this.messages.component("commands.help-count", placeholders));
     }
 
-    private record ParsedOptions(int amount, ClaySoldierRole role, Player target, String error) {
+    private String formatNumber(double value) {
+        return Math.rint(value) == value ? Long.toString(Math.round(value)) : Double.toString(value);
+    }
+
+    private record ParsedOptions(int amount, ClaySoldierRole role, Player target, String error, Map<String, String> errorPlaceholders) {
     }
 }

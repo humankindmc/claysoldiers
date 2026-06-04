@@ -1,12 +1,15 @@
 package com.humankindgames.claysoldiers;
 
+import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
+import java.util.PriorityQueue;
 import java.util.Random;
 import java.util.Set;
 import java.util.UUID;
@@ -19,6 +22,7 @@ import org.bukkit.Particle;
 import org.bukkit.Sound;
 import org.bukkit.World;
 import org.bukkit.block.Block;
+import org.bukkit.block.data.type.Slab;
 import org.bukkit.entity.ArmorStand;
 import org.bukkit.entity.Entity;
 import org.bukkit.inventory.EntityEquipment;
@@ -40,6 +44,7 @@ public final class ClaySoldierService {
     private final NamespacedKey entityTypeKey;
     private final NamespacedKey teamKey;
     private final NamespacedKey roleKey;
+    private final NamespacedKey modifiersKey;
     private final NamespacedKey healthKey;
     private final Set<UUID> activeSoldiers = new HashSet<>();
     private final Map<UUID, SoldierBrain> brains = new HashMap<>();
@@ -53,6 +58,7 @@ public final class ClaySoldierService {
         this.entityTypeKey = new NamespacedKey(plugin, "clay_entity_type");
         this.teamKey = new NamespacedKey(plugin, "clay_team");
         this.roleKey = new NamespacedKey(plugin, "clay_role");
+        this.modifiersKey = new NamespacedKey(plugin, "clay_modifiers");
         this.healthKey = new NamespacedKey(plugin, "clay_health");
     }
 
@@ -81,6 +87,41 @@ public final class ClaySoldierService {
 
     public int activeCount() {
         return this.activeSoldiers.size();
+    }
+
+    public int nearbySoldierCount(Location origin) {
+        if( !this.settings.spawnLimitEnabled() ) {
+            return 0;
+        }
+
+        double radiusSquared = this.settings.spawnLimitRadius() * this.settings.spawnLimitRadius();
+        int count = 0;
+        for( UUID id : List.copyOf(this.activeSoldiers) ) {
+            Entity entity = this.plugin.getServer().getEntity(id);
+            if( !(entity instanceof ArmorStand stand) || stand.isDead() || !isSoldier(stand) ) {
+                forgetSoldier(id);
+                continue;
+            }
+
+            if( stand.getWorld().equals(origin.getWorld()) && stand.getLocation().distanceSquared(origin) <= radiusSquared ) {
+                count++;
+            }
+        }
+
+        return count;
+    }
+
+    public boolean canSpawnSoldiers(Location origin, int count) {
+        return !this.settings.spawnLimitEnabled()
+                || nearbySoldierCount(origin) + count <= this.settings.spawnLimitMaxSoldiers();
+    }
+
+    public int spawnLimitMaxSoldiers() {
+        return this.settings.spawnLimitMaxSoldiers();
+    }
+
+    public double spawnLimitRadius() {
+        return this.settings.spawnLimitRadius();
     }
 
     public void registerLoadedSoldiers() {
@@ -140,9 +181,17 @@ public final class ClaySoldierService {
     }
 
     public List<ArmorStand> spawnSoldiers(ClayTeam team, ClaySoldierRole role, Location baseLocation, int count) {
+        return spawnSoldiers(team, role, baseLocation, count, Set.of());
+    }
+
+    public List<ArmorStand> spawnSoldiers(ClayTeam team, ClaySoldierRole role, Location baseLocation, int count, Set<ClaySoldierModifier> modifiers) {
         int boundedCount = Math.max(1, Math.min(this.settings.maxSpawnPerUse(), count));
+        if( !canSpawnSoldiers(baseLocation, boundedCount) ) {
+            throw new IllegalStateException("Clay soldier spawn limit reached");
+        }
+
         return java.util.stream.IntStream.range(0, boundedCount)
-                .mapToObj(i -> spawnSoldier(team, role, randomizedSpawn(baseLocation)))
+                .mapToObj(i -> spawnSoldier(team, role, randomizedSpawn(baseLocation), modifiers))
                 .toList();
     }
 
@@ -151,6 +200,10 @@ public final class ClaySoldierService {
     }
 
     public ArmorStand spawnSoldier(ClayTeam team, ClaySoldierRole role, Location location) {
+        return spawnSoldier(team, role, location, Set.of());
+    }
+
+    public ArmorStand spawnSoldier(ClayTeam team, ClaySoldierRole role, Location location, Set<ClaySoldierModifier> modifiers) {
         World world = location.getWorld();
         if( world == null ) {
             throw new IllegalArgumentException("Cannot spawn a clay soldier without a world");
@@ -161,7 +214,7 @@ public final class ClaySoldierService {
         }
 
         ArmorStand stand = world.spawn(location, ArmorStand.class);
-        configureSoldier(stand, team, role);
+        configureSoldier(stand, team, role, modifiers);
         this.activeSoldiers.add(stand.getUniqueId());
         this.brains.put(stand.getUniqueId(), new SoldierBrain());
         playSound(stand.getLocation(), Sound.BLOCK_GRAVEL_BREAK, 1.0F, 1.0F + this.random.nextFloat() * this.settings.soundPitchJitter());
@@ -228,7 +281,7 @@ public final class ClaySoldierService {
         return removed;
     }
 
-    private void configureSoldier(ArmorStand stand, ClayTeam team, ClaySoldierRole role) {
+    private void configureSoldier(ArmorStand stand, ClayTeam team, ClaySoldierRole role, Set<ClaySoldierModifier> modifiers) {
         stand.setSmall(true);
         stand.setArms(true);
         stand.setBasePlate(false);
@@ -241,8 +294,9 @@ public final class ClaySoldierService {
         data.set(this.entityTypeKey, PersistentDataType.STRING, SOLDIER_ENTITY_TYPE);
         data.set(this.teamKey, PersistentDataType.STRING, team.key());
         data.set(this.roleKey, PersistentDataType.STRING, role.key());
+        data.set(this.modifiersKey, PersistentDataType.STRING, serializeModifiers(modifiers));
         ClaySoldierSettings.RoleTuning roleTuning = this.settings.role(role);
-        data.set(this.healthKey, PersistentDataType.DOUBLE, maxHealth(role));
+        data.set(this.healthKey, PersistentDataType.DOUBLE, maxHealth(role, modifiers));
         updateNameplate(stand);
 
         EntityEquipment equipment = stand.getEquipment();
@@ -275,6 +329,7 @@ public final class ClaySoldierService {
             SoldierBrain brain = brain(soldier);
             ClaySoldierRole role = getRole(soldier);
             brain.tick(this.settings.tickPeriodTicks());
+            updateFormationState(soldier, brain, role);
 
             if( brain.windupTicks > 0 ) {
                 tickWindup(soldier, brain, role);
@@ -282,6 +337,8 @@ public final class ClaySoldierService {
                 Optional<ArmorStand> nearestEnemy = findNearestEnemy(soldier, role);
                 if( nearestEnemy.isPresent() ) {
                     engage(soldier, nearestEnemy.get(), brain, role);
+                } else if( brain.activeFormation.isActive() ) {
+                    holdFormation(soldier, brain, role);
                 } else {
                     wander(soldier, brain, role);
                 }
@@ -289,6 +346,18 @@ public final class ClaySoldierService {
 
             applyPose(soldier, brain, role);
             brain.movedThisTick = false;
+        }
+    }
+
+    private void updateFormationState(ArmorStand soldier, SoldierBrain brain, ClaySoldierRole role) {
+        TacticalFormation previousFormation = brain.activeFormation;
+        brain.activeFormation = tacticalFormation(soldier, role);
+        if( previousFormation != brain.activeFormation ) {
+            updateNameplate(soldier);
+            if( previousFormation == TacticalFormation.NONE && brain.activeFormation.isActive() && this.settings.formationSoundEnabled() ) {
+                playSound(soldier.getLocation(), Sound.BLOCK_NOTE_BLOCK_PLING, 0.55F, 1.65F);
+                spawnParticle(Particle.HAPPY_VILLAGER, soldier.getLocation().clone().add(0.0D, 0.85D, 0.0D), scaledCount(2), 0.06D, 0.05D, 0.06D, 0.0D);
+            }
         }
     }
 
@@ -314,7 +383,7 @@ public final class ClaySoldierService {
         }
 
         ArmorStand nearest = null;
-        double searchRange = Math.max(this.settings.followRange(), attackRange(role) + this.settings.targetSearchExtraRange());
+        double searchRange = Math.max(this.settings.followRange(), attackRange(soldier, role) + this.settings.targetSearchExtraRange());
         double nearestDistanceSquared = searchRange * searchRange;
 
         for( UUID id : this.activeSoldiers ) {
@@ -340,31 +409,69 @@ public final class ClaySoldierService {
 
     private void engage(ArmorStand soldier, ArmorStand target, SoldierBrain brain, ClaySoldierRole role) {
         double distanceSquared = soldier.getLocation().distanceSquared(target.getLocation());
-        double attackRange = attackRange(role);
+        double attackRange = attackRange(soldier, role);
         ClaySoldierSettings.RoleTuning roleTuning = this.settings.role(role);
+        TacticalFormation tacticalFormation = brain.activeFormation;
         face(soldier, target.getLocation());
 
-        if( distanceSquared <= attackRange * attackRange && brain.attackCooldownTicks <= 0 ) {
+        if( distanceSquared <= attackRange * attackRange && brain.attackCooldownTicks <= 0 && hasAttackLineOfSight(soldier, target) ) {
             queueAttack(soldier, target, brain, role, Math.sqrt(distanceSquared));
             return;
         }
 
-        if( this.settings.useFlanking() && brain.flankTicks <= 0 && this.random.nextDouble() < roleTuning.flankChance() * this.settings.flankChanceScale() ) {
+        if( tacticalFormation.isWall() ) {
+            brain.flankTicks = 0;
+        }
+
+        if( !tacticalFormation.isActive() && this.settings.useFlanking() && brain.flankTicks <= 0 && this.random.nextDouble() < roleTuning.flankChance() * this.settings.flankChanceScale() ) {
             brain.startFlank(this.random, this.settings);
         }
 
-        Location goal = brain.flankTicks > 0
+        Location goal = brain.flankTicks > 0 && !tacticalFormation.isActive()
                 ? flankPosition(soldier, target, brain)
-                : formationPosition(soldier, target, role);
-        double step = this.settings.moveStep() * roleTuning.speedMultiplier();
+                : formationPosition(soldier, target, role, tacticalFormation);
+        double step = this.settings.moveStep() * speedMultiplier(soldier, roleTuning);
+        if( tacticalFormation == TacticalFormation.SHIELD_WALL ) {
+            step *= this.settings.shieldWallSpeedMultiplier();
+        } else if( tacticalFormation.isActive() ) {
+            step *= this.settings.tacticalFormationSpeedMultiplier();
+        }
 
         if( distanceSquared < (attackRange + 0.8D) * (attackRange + 0.8D) && role != ClaySoldierRole.GUARD ) {
             step *= this.settings.closeCombatStepMultiplier();
         }
 
-        if( moveToward(soldier, goal, step) ) {
+        if( moveToward(soldier, brain, goal, step) ) {
             brain.movedThisTick = true;
             maybeHop(soldier, this.settings.chaseJumpChance());
+            if( brain.animationTicks <= 0 ) {
+                brain.animation = AnimationState.RUN;
+                brain.animationTicks = this.settings.tickPeriodTicks() + 3;
+            }
+        }
+    }
+
+    private void holdFormation(ArmorStand soldier, SoldierBrain brain, ClaySoldierRole role) {
+        Optional<Location> centroid = formationCentroid(soldier, role);
+        if( centroid.isEmpty() ) {
+            return;
+        }
+
+        Location target = centroid.get();
+        faceDirection(soldier, horizontalDirection(soldier.getLocation(), target));
+        if( soldier.getLocation().distanceSquared(target) <= this.settings.shieldWallHoldRadius() * this.settings.shieldWallHoldRadius() ) {
+            return;
+        }
+
+        double step = this.settings.moveStep() * speedMultiplier(soldier, this.settings.role(role));
+        if( brain.activeFormation == TacticalFormation.SHIELD_WALL ) {
+            step *= this.settings.shieldWallSpeedMultiplier();
+        } else {
+            step *= this.settings.tacticalFormationSpeedMultiplier();
+        }
+
+        if( moveToward(soldier, brain, target, step) ) {
+            brain.movedThisTick = true;
             if( brain.animationTicks <= 0 ) {
                 brain.animation = AnimationState.RUN;
                 brain.animationTicks = this.settings.tickPeriodTicks() + 3;
@@ -375,10 +482,11 @@ public final class ClaySoldierService {
     private void queueAttack(ArmorStand soldier, ArmorStand target, SoldierBrain brain, ClaySoldierRole role, double distance) {
         AttackStyle style = chooseAttackStyle(soldier, target, role, distance);
         ClaySoldierSettings.AttackTuning tuning = this.settings.attack(style.key);
+        int cooldownTicks = (int) Math.round((this.settings.attackCooldownTicks() + tuning.extraCooldownTicks()) * cooldownMultiplier(soldier));
         brain.queuedAttack = style;
         brain.queuedTargetId = target.getUniqueId();
         brain.windupTicks = tuning.windupTicks();
-        brain.attackCooldownTicks = this.settings.attackCooldownTicks() + tuning.extraCooldownTicks();
+        brain.attackCooldownTicks = Math.max(this.settings.tickPeriodTicks(), cooldownTicks);
         brain.animation = style.animation;
         brain.animationTicks = tuning.windupTicks() + 8;
 
@@ -417,12 +525,19 @@ public final class ClaySoldierService {
         AttackStyle style = brain.queuedAttack == null ? AttackStyle.QUICK : brain.queuedAttack;
         ClaySoldierSettings.AttackTuning attackTuning = this.settings.attack(style.key);
         ClaySoldierSettings.RoleTuning roleTuning = this.settings.role(role);
-        double maxRange = attackRange(role) + attackTuning.rangeBonus();
+        double maxRange = attackRange(soldier, role) + attackTuning.rangeBonus();
         if( soldier.getLocation().distanceSquared(target.getLocation()) > maxRange * maxRange ) {
             return;
         }
+        if( !hasAttackLineOfSight(soldier, target) ) {
+            return;
+        }
 
-        double damage = this.settings.attackDamage() * roleTuning.damageMultiplier() * attackTuning.damageMultiplier();
+        TacticalFormation tacticalFormation = brain.activeFormation;
+        double damage = this.settings.attackDamage() * damageMultiplier(soldier, roleTuning) * attackTuning.damageMultiplier();
+        if( tacticalFormation.isWall() ) {
+            damage *= this.settings.tacticalFormationDamageMultiplier();
+        }
         soldier.swingMainHand();
 
         switch( style ) {
@@ -456,6 +571,9 @@ public final class ClaySoldierService {
                 playSound(target.getLocation(), Sound.ENTITY_PLAYER_ATTACK_WEAK, 0.55F, style == AttackStyle.POKE ? 1.75F : 1.45F);
             }
         }
+
+        applyAttackModifiers(soldier, target, damage);
+        applyFormationAttack(soldier, target, damage, tacticalFormation);
     }
 
     private void wander(ArmorStand soldier, SoldierBrain brain, ClaySoldierRole role) {
@@ -465,7 +583,7 @@ public final class ClaySoldierService {
 
         double angle = this.random.nextDouble() * Math.PI * 2.0D;
         Location target = soldier.getLocation().clone().add(Math.cos(angle), 0.0D, Math.sin(angle));
-        if( moveToward(soldier, target, this.settings.moveStep() * this.settings.role(role).speedMultiplier() * this.settings.wanderStepMultiplier()) ) {
+        if( moveToward(soldier, brain, target, this.settings.moveStep() * speedMultiplier(soldier, this.settings.role(role)) * this.settings.wanderStepMultiplier()) ) {
             brain.movedThisTick = true;
             maybeHop(soldier, this.settings.idleJumpChance());
             brain.animation = AnimationState.RUN;
@@ -497,7 +615,11 @@ public final class ClaySoldierService {
         return true;
     }
 
-    private Location formationPosition(ArmorStand soldier, ArmorStand target, ClaySoldierRole role) {
+    private Location formationPosition(ArmorStand soldier, ArmorStand target, ClaySoldierRole role, TacticalFormation tacticalFormation) {
+        if( tacticalFormation.isActive() ) {
+            return tacticalFormationPosition(soldier, target, role, tacticalFormation);
+        }
+
         Vector away = horizontalDirection(target.getLocation(), soldier.getLocation());
         Vector side = perpendicular(away);
         int slot = formationSlot(soldier, target);
@@ -506,7 +628,7 @@ public final class ClaySoldierService {
         int column = slot % columns - center;
         int row = slot / columns;
         ClaySoldierSettings.RoleTuning roleTuning = this.settings.role(role);
-        double distance = Math.max(0.65D, attackRange(role) * this.settings.formationBaseDistanceMultiplier()
+        double distance = Math.max(0.65D, attackRange(soldier, role) * this.settings.formationBaseDistanceMultiplier()
                 + roleTuning.formationDepth() + row * this.settings.formationRowSpacing());
 
         if( role == ClaySoldierRole.SKIRMISHER ) {
@@ -519,6 +641,38 @@ public final class ClaySoldierService {
         return target.getLocation().clone()
                 .add(away.multiply(distance))
                 .add(side.multiply(column * this.settings.formationLateralSpacing()));
+    }
+
+    private Location tacticalFormationPosition(ArmorStand soldier, ArmorStand target, ClaySoldierRole role, TacticalFormation tacticalFormation) {
+        Vector away = horizontalDirection(target.getLocation(), soldier.getLocation());
+        Vector side = perpendicular(away);
+        int slot = tacticalFormationSlot(soldier, role);
+        int columns = Math.max(1, this.settings.formationColumns());
+        int center = columns / 2;
+        int column = slot % columns - center;
+        int row = slot / columns;
+        double lateralSpacing = tacticalFormation == TacticalFormation.SHIELD_WALL
+                ? this.settings.shieldWallLateralSpacing()
+                : this.settings.formationLateralSpacing();
+        double rowSpacing = tacticalFormation == TacticalFormation.SHIELD_WALL
+                ? this.settings.shieldWallRowSpacing()
+                : this.settings.formationRowSpacing();
+
+        double distance = switch( tacticalFormation ) {
+            case SHIELD_WALL -> this.settings.shieldWallDistance() + row * rowSpacing;
+            case SPEAR_WALL -> this.settings.spearWallDistance() + row * rowSpacing;
+            case COMBINED_SPEAR_WALL, SUPPORT_HIDE -> this.settings.supportBehindWallDistance() + row * rowSpacing;
+            case FLANK_SUPPORT -> this.settings.shieldWallDistance() + row * rowSpacing;
+            case NONE -> this.settings.attackRange();
+        };
+
+        Location base = target.getLocation().clone().add(away.multiply(distance));
+        if( tacticalFormation == TacticalFormation.FLANK_SUPPORT ) {
+            int flankSide = slot % 2 == 0 ? 1 : -1;
+            return base.add(side.multiply(flankSide * (this.settings.flankProtectionWidth() + row * lateralSpacing)));
+        }
+
+        return base.add(side.multiply(column * lateralSpacing));
     }
 
     private int formationSlot(ArmorStand soldier, ArmorStand target) {
@@ -539,6 +693,127 @@ public final class ClaySoldierService {
 
         int index = allies.indexOf(soldier);
         return Math.max(0, index);
+    }
+
+    private Optional<Location> formationCentroid(ArmorStand soldier, ClaySoldierRole role) {
+        Optional<ClayTeam> team = getTeam(soldier);
+        if( team.isEmpty() ) {
+            return Optional.empty();
+        }
+
+        double radiusSquared = this.settings.tacticalFormationScanRange() * this.settings.tacticalFormationScanRange();
+        List<ArmorStand> allies = this.activeSoldiers.stream()
+                .map(this.plugin.getServer()::getEntity)
+                .filter(ArmorStand.class::isInstance)
+                .map(ArmorStand.class::cast)
+                .filter(candidate -> !candidate.isDead() && candidate.getWorld().equals(soldier.getWorld()))
+                .filter(candidate -> getTeam(candidate).orElse(null) == team.get())
+                .filter(candidate -> getRole(candidate) == role)
+                .filter(candidate -> candidate.getLocation().distanceSquared(soldier.getLocation()) <= radiusSquared)
+                .toList();
+
+        if( allies.isEmpty() ) {
+            return Optional.empty();
+        }
+
+        double x = 0.0D;
+        double y = 0.0D;
+        double z = 0.0D;
+        for( ArmorStand ally : allies ) {
+            Location location = ally.getLocation();
+            x += location.getX();
+            y += location.getY();
+            z += location.getZ();
+        }
+
+        return Optional.of(new Location(soldier.getWorld(), x / allies.size(), y / allies.size(), z / allies.size()));
+    }
+
+    private TacticalFormation tacticalFormation(ArmorStand soldier, ClaySoldierRole role) {
+        if( !this.settings.useFormations() || !this.settings.useTacticalFormations() ) {
+            return TacticalFormation.NONE;
+        }
+
+        Optional<ClayTeam> team = getTeam(soldier);
+        if( team.isEmpty() ) {
+            return TacticalFormation.NONE;
+        }
+
+        boolean shieldWall = roleCountNear(soldier, team.get(), ClaySoldierRole.GUARD) >= this.settings.tacticalFormationMinSoldiers();
+        boolean spearWall = roleCountNear(soldier, team.get(), ClaySoldierRole.SPEARMAN) >= this.settings.tacticalFormationMinSoldiers();
+
+        if( role == ClaySoldierRole.GUARD && shieldWall ) {
+            return TacticalFormation.SHIELD_WALL;
+        }
+
+        if( role == ClaySoldierRole.SPEARMAN && spearWall ) {
+            if( shieldWall && stableChance(soldier, this.settings.combinedWallChance()) ) {
+                return TacticalFormation.COMBINED_SPEAR_WALL;
+            }
+            return TacticalFormation.SPEAR_WALL;
+        }
+
+        if( role == ClaySoldierRole.SLINGER && shieldWall ) {
+            return TacticalFormation.SUPPORT_HIDE;
+        }
+
+        if( role != ClaySoldierRole.SLINGER && (shieldWall || spearWall) ) {
+            return TacticalFormation.FLANK_SUPPORT;
+        }
+
+        return TacticalFormation.NONE;
+    }
+
+    private int roleCountNear(ArmorStand soldier, ClayTeam team, ClaySoldierRole role) {
+        double radiusSquared = this.settings.tacticalFormationScanRange() * this.settings.tacticalFormationScanRange();
+        int count = 0;
+        for( UUID id : this.activeSoldiers ) {
+            Entity entity = this.plugin.getServer().getEntity(id);
+            if( !(entity instanceof ArmorStand candidate) || candidate.isDead() || !candidate.getWorld().equals(soldier.getWorld()) ) {
+                continue;
+            }
+
+            if( getTeam(candidate).orElse(null) == team && getRole(candidate) == role
+                    && candidate.getLocation().distanceSquared(soldier.getLocation()) <= radiusSquared ) {
+                count++;
+            }
+        }
+
+        return count;
+    }
+
+    private int tacticalFormationSlot(ArmorStand soldier, ClaySoldierRole role) {
+        Optional<ClayTeam> team = getTeam(soldier);
+        if( team.isEmpty() ) {
+            return 0;
+        }
+
+        double radiusSquared = this.settings.tacticalFormationScanRange() * this.settings.tacticalFormationScanRange();
+        List<ArmorStand> allies = this.activeSoldiers.stream()
+                .map(this.plugin.getServer()::getEntity)
+                .filter(ArmorStand.class::isInstance)
+                .map(ArmorStand.class::cast)
+                .filter(candidate -> !candidate.isDead() && candidate.getWorld().equals(soldier.getWorld()))
+                .filter(candidate -> getTeam(candidate).orElse(null) == team.get())
+                .filter(candidate -> getRole(candidate) == role)
+                .filter(candidate -> candidate.getLocation().distanceSquared(soldier.getLocation()) <= radiusSquared)
+                .sorted(Comparator.comparing(Entity::getUniqueId))
+                .toList();
+
+        int index = allies.indexOf(soldier);
+        return Math.max(0, index);
+    }
+
+    private boolean stableChance(ArmorStand soldier, double chance) {
+        if( chance <= 0.0D ) {
+            return false;
+        }
+        if( chance >= 1.0D ) {
+            return true;
+        }
+
+        long value = Math.abs(soldier.getUniqueId().getLeastSignificantBits() % 10_000L);
+        return value / 10_000.0D < chance;
     }
 
     private Location flankPosition(ArmorStand soldier, ArmorStand target, SoldierBrain brain) {
@@ -577,6 +852,88 @@ public final class ClaySoldierService {
         }
     }
 
+    private void applyAttackModifiers(ArmorStand soldier, ArmorStand target, double baseDamage) {
+        Set<ClaySoldierModifier> modifiers = getModifiers(soldier);
+        if( modifiers.isEmpty() ) {
+            return;
+        }
+
+        if( modifiers.contains(ClaySoldierModifier.EXPLOSIVE) ) {
+            ClaySoldierSettings.ModifierTuning tuning = this.settings.modifier(ClaySoldierModifier.EXPLOSIVE);
+            if( tuning.splashRadius() > 0.0D && tuning.splashDamageMultiplier() > 0.0D ) {
+                ClayTeam friendlyTeam = getTeam(soldier).orElse(ClayTeam.CLAY);
+                for( ArmorStand enemy : nearbyEnemySoldiers(target, friendlyTeam, tuning.splashRadius()) ) {
+                    if( !enemy.equals(target) ) {
+                        damageSoldier(enemy, baseDamage * tuning.splashDamageMultiplier(), soldier);
+                    }
+                }
+                spawnParticle(Particle.EXPLOSION, target.getLocation().clone().add(0.0D, 0.45D, 0.0D), scaledCount(1));
+                playSound(target.getLocation(), Sound.ENTITY_GENERIC_EXPLODE, 0.35F, 1.8F);
+            }
+        }
+
+        if( modifiers.contains(ClaySoldierModifier.VENOM) && !target.isDead() && isSoldier(target) ) {
+            double venomDamage = this.settings.modifier(ClaySoldierModifier.VENOM).venomDamage();
+            if( venomDamage > 0.0D ) {
+                damageSoldier(target, venomDamage, soldier);
+                spawnParticle(Particle.DUST, target.getLocation().clone().add(0.0D, 0.55D, 0.0D), scaledCount(4), 0.08D, 0.08D, 0.08D,
+                        new Particle.DustOptions(org.bukkit.Color.fromRGB(0x2E7D32), 0.7F));
+            }
+        }
+
+        if( modifiers.contains(ClaySoldierModifier.LIFESTEAL) ) {
+            double lifesteal = this.settings.modifier(ClaySoldierModifier.LIFESTEAL).lifestealAmount();
+            if( lifesteal > 0.0D ) {
+                healSoldier(soldier, lifesteal);
+                spawnParticle(Particle.HEART, soldier.getLocation().clone().add(0.0D, 0.75D, 0.0D), scaledCount(1), 0.04D, 0.04D, 0.04D, 0.0D);
+            }
+        }
+    }
+
+    private void applyFormationAttack(ArmorStand soldier, ArmorStand target, double baseDamage, TacticalFormation tacticalFormation) {
+        if( !tacticalFormation.isWall() || target.isDead() || !isSoldier(target) ) {
+            return;
+        }
+
+        double bonusDamage = Math.max(0.0D, baseDamage * (this.settings.specialFormationDamageMultiplier() - 1.0D));
+        switch( tacticalFormation ) {
+            case SHIELD_WALL -> {
+                if( bonusDamage > 0.0D ) {
+                    damageSoldier(target, bonusDamage, soldier);
+                }
+                pushAway(target, soldier.getLocation(), this.settings.shieldBashPushDistance() * 0.75D);
+                spawnParticle(Particle.CRIT, target.getLocation().clone().add(0.0D, 0.55D, 0.0D), scaledCount(3), 0.08D, 0.08D, 0.08D, 0.0D);
+                playSound(target.getLocation(), Sound.ITEM_SHIELD_BLOCK, 0.55F, 0.85F);
+            }
+            case SPEAR_WALL, COMBINED_SPEAR_WALL -> {
+                if( bonusDamage > 0.0D ) {
+                    damageSoldier(target, bonusDamage, soldier);
+                }
+                ClayTeam friendlyTeam = getTeam(soldier).orElse(ClayTeam.CLAY);
+                for( ArmorStand enemy : nearbyEnemySoldiers(target, friendlyTeam, this.settings.sweepClusterRadius()) ) {
+                    if( !enemy.equals(target) ) {
+                        damageSoldier(enemy, baseDamage * 0.35D, soldier);
+                    }
+                }
+                spawnParticle(Particle.CRIT, target.getLocation().clone().add(0.0D, 0.55D, 0.0D), scaledCount(5), 0.12D, 0.06D, 0.12D, 0.0D);
+                playSound(target.getLocation(), Sound.ENTITY_PLAYER_ATTACK_STRONG, 0.6F, tacticalFormation == TacticalFormation.COMBINED_SPEAR_WALL ? 1.0F : 1.25F);
+            }
+            case NONE, SUPPORT_HIDE, FLANK_SUPPORT -> {
+                // Not a wall attack.
+            }
+        }
+    }
+
+    private void healSoldier(ArmorStand soldier, double amount) {
+        if( amount <= 0.0D || !isSoldier(soldier) || soldier.isDead() ) {
+            return;
+        }
+
+        double health = Math.min(maxHealth(soldier), getHealth(soldier) + amount);
+        soldier.getPersistentDataContainer().set(this.healthKey, PersistentDataType.DOUBLE, health);
+        updateNameplate(soldier);
+    }
+
     private int nearbyEnemies(ArmorStand center, ClayTeam friendlyTeam, double radius) {
         return nearbyEnemySoldiers(center, friendlyTeam, radius).size();
     }
@@ -594,7 +951,7 @@ public final class ClaySoldierService {
                 .toList();
     }
 
-    private boolean moveToward(ArmorStand soldier, Location target, double stepSize) {
+    private boolean moveToward(ArmorStand soldier, SoldierBrain brain, Location target, double stepSize) {
         Location current = soldier.getLocation();
         Vector direction = target.toVector().subtract(current.toVector());
         direction.setY(0.0D);
@@ -606,16 +963,373 @@ public final class ClaySoldierService {
         direction.normalize();
         Location next = current.clone().add(direction.clone().multiply(stepSize));
         next.setDirection(direction);
-        if( moveTo(soldier, next) ) {
+        boolean directRouteClear = hasClearMovementPath(current, target);
+        if( directRouteClear && moveTo(soldier, next) ) {
+            brain.clearPath();
             return true;
         }
 
+        if( !this.settings.pathfindingEnabled() ) {
+            return false;
+        }
+
+        if( this.settings.pathfindingPlannerEnabled() && followPlannedPath(soldier, brain, target, stepSize) ) {
+            return true;
+        }
+
+        brain.clearPath();
         return tryBlockedMovement(soldier, current, direction, stepSize);
     }
 
+    private boolean followPlannedPath(ArmorStand soldier, SoldierBrain brain, Location target, double stepSize) {
+        if( needsNewPath(brain, target) ) {
+            Optional<List<Location>> plannedPath = planPath(soldier.getLocation(), target);
+            if( plannedPath.isEmpty() || plannedPath.get().isEmpty() ) {
+                brain.clearPath();
+                return false;
+            }
+
+            brain.path = plannedPath.get();
+            brain.pathIndex = 0;
+            brain.pathTarget = target.clone();
+            brain.pathRefreshTicks = this.settings.pathfindingRouteRefreshTicks();
+        }
+
+        Location current = soldier.getLocation();
+        advanceReachedWaypoints(brain, current);
+        if( brain.pathIndex >= brain.path.size() ) {
+            brain.clearPath();
+            return false;
+        }
+
+        if( this.settings.pathfindingSmoothRoutes() ) {
+            skipVisibleWaypoints(brain, current);
+        }
+
+        Location waypoint = brain.path.get(brain.pathIndex);
+        Vector direction = waypoint.toVector().subtract(current.toVector());
+        direction.setY(0.0D);
+        if( direction.lengthSquared() < MIN_MOVE_DISTANCE_SQUARED ) {
+            brain.pathIndex++;
+            return brain.pathIndex < brain.path.size();
+        }
+
+        direction.normalize();
+        double distance = current.distance(waypoint);
+        Location next = current.clone().add(direction.clone().multiply(Math.min(stepSize, distance)));
+        next.setY(current.getY() + Math.max(-this.settings.pathfindingMaxDropHeight(), Math.min(this.settings.pathfindingMaxStepHeight(), waypoint.getY() - current.getY())));
+        next.setDirection(direction);
+
+        if( !hasClearMovementPath(current, next, true) || !moveTo(soldier, next) ) {
+            brain.clearPath();
+            return false;
+        }
+
+        return true;
+    }
+
+    private boolean needsNewPath(SoldierBrain brain, Location target) {
+        if( brain.path.isEmpty() || brain.pathIndex >= brain.path.size() || brain.pathTarget == null ) {
+            return true;
+        }
+        if( brain.pathRefreshTicks <= 0 ) {
+            return true;
+        }
+        if( !brain.pathTarget.getWorld().equals(target.getWorld()) ) {
+            return true;
+        }
+
+        double threshold = this.settings.pathfindingRouteTargetMoveThreshold();
+        return brain.pathTarget.distanceSquared(target) > threshold * threshold;
+    }
+
+    private void advanceReachedWaypoints(SoldierBrain brain, Location current) {
+        double reachDistanceSquared = this.settings.pathfindingWaypointReachDistance() * this.settings.pathfindingWaypointReachDistance();
+        while( brain.pathIndex < brain.path.size() && current.distanceSquared(brain.path.get(brain.pathIndex)) <= reachDistanceSquared ) {
+            brain.pathIndex++;
+        }
+    }
+
+    private void skipVisibleWaypoints(SoldierBrain brain, Location current) {
+        for( int index = brain.path.size() - 1; index > brain.pathIndex; index-- ) {
+            if( hasClearMovementPath(current, brain.path.get(index)) ) {
+                brain.pathIndex = index;
+                return;
+            }
+        }
+    }
+
+    private Optional<List<Location>> planPath(Location start, Location target) {
+        if( !start.getWorld().equals(target.getWorld()) ) {
+            return Optional.empty();
+        }
+
+        double maxRange = this.settings.pathfindingMaxRange();
+        Location plannedTarget = clampPathTarget(start, target, maxRange);
+        World world = start.getWorld();
+        Optional<PathNode> startNode = nearestPathNode(start, start.getY(), 1);
+        if( startNode.isEmpty() ) {
+            return Optional.empty();
+        }
+
+        Optional<PathNode> goalNode = nearestPathNode(plannedTarget, startNode.get().y(), 3);
+        if( goalNode.isEmpty() ) {
+            return Optional.empty();
+        }
+
+        if( startNode.get().equals(goalNode.get()) ) {
+            return Optional.empty();
+        }
+
+        PriorityQueue<PathSearchNode> open = new PriorityQueue<>(Comparator.comparingDouble(node -> node.fCost));
+        Map<PathNode, PathSearchNode> allNodes = new HashMap<>();
+        Set<PathNode> closed = new HashSet<>();
+        PathSearchNode first = new PathSearchNode(startNode.get(), null, 0.0D, pathHeuristic(startNode.get(), goalNode.get()));
+        open.add(first);
+        allNodes.put(first.node, first);
+
+        int visited = 0;
+        while( !open.isEmpty() && visited++ < this.settings.pathfindingMaxNodes() ) {
+            PathSearchNode current = open.poll();
+            if( !closed.add(current.node) ) {
+                continue;
+            }
+
+            if( current.node.equals(goalNode.get()) ) {
+                return Optional.of(pathLocations(world, current));
+            }
+
+            for( PathNode neighbor : pathNeighbors(world, current.node) ) {
+                if( closed.contains(neighbor) || exceedsPathRange(startNode.get(), goalNode.get(), neighbor, maxRange) ) {
+                    continue;
+                }
+
+                double cost = current.gCost + pathMoveCost(world, current.node, neighbor);
+                PathSearchNode known = allNodes.get(neighbor);
+                if( known != null && cost >= known.gCost ) {
+                    continue;
+                }
+
+                PathSearchNode next = new PathSearchNode(neighbor, current, cost, cost + pathHeuristic(neighbor, goalNode.get()));
+                allNodes.put(neighbor, next);
+                open.add(next);
+            }
+        }
+
+        return Optional.empty();
+    }
+
+    private Location clampPathTarget(Location start, Location target, double maxRange) {
+        Vector delta = target.toVector().subtract(start.toVector());
+        delta.setY(0.0D);
+        if( delta.length() <= maxRange ) {
+            return target;
+        }
+
+        Vector direction = delta.normalize().multiply(maxRange);
+        return start.clone().add(direction);
+    }
+
+    private Optional<PathNode> nearestPathNode(Location location, double referenceY, int radius) {
+        World world = location.getWorld();
+        int centerX = location.getBlockX();
+        int centerZ = location.getBlockZ();
+        for( int currentRadius = 0; currentRadius <= radius; currentRadius++ ) {
+            Optional<PathNode> closest = Optional.empty();
+            double closestDistanceSquared = Double.MAX_VALUE;
+            for( int dx = -currentRadius; dx <= currentRadius; dx++ ) {
+                for( int dz = -currentRadius; dz <= currentRadius; dz++ ) {
+                    if( Math.max(Math.abs(dx), Math.abs(dz)) != currentRadius ) {
+                        continue;
+                    }
+
+                    Optional<PathNode> node = walkablePathNodeAt(world, centerX + dx, centerZ + dz, referenceY);
+                    if( node.isEmpty() ) {
+                        continue;
+                    }
+
+                    double distanceSquared = nodeLocation(world, node.get()).distanceSquared(location);
+                    if( distanceSquared < closestDistanceSquared ) {
+                        closest = node;
+                        closestDistanceSquared = distanceSquared;
+                    }
+                }
+            }
+
+            if( closest.isPresent() ) {
+                return closest;
+            }
+        }
+
+        return Optional.empty();
+    }
+
+    private List<PathNode> pathNeighbors(World world, PathNode node) {
+        int[][] directions = this.settings.pathfindingAllowDiagonal()
+                ? new int[][] {{1, 0}, {-1, 0}, {0, 1}, {0, -1}, {1, 1}, {1, -1}, {-1, 1}, {-1, -1}}
+                : new int[][] {{1, 0}, {-1, 0}, {0, 1}, {0, -1}};
+        List<PathNode> neighbors = new ArrayList<>(directions.length);
+        double currentY = node.y();
+
+        for( int[] direction : directions ) {
+            int dx = direction[0];
+            int dz = direction[1];
+            Optional<PathNode> neighbor = walkablePathNodeAt(world, node.x + dx, node.z + dz, currentY);
+            if( neighbor.isEmpty() || !canTraverseHeight(currentY, neighbor.get().y()) ) {
+                continue;
+            }
+
+            if( dx != 0 && dz != 0 && this.settings.pathfindingAvoidCornerCutting()
+                    && (!walkablePathNodeAt(world, node.x + dx, node.z, currentY).filter(candidate -> canTraverseHeight(currentY, candidate.y())).isPresent()
+                    || !walkablePathNodeAt(world, node.x, node.z + dz, currentY).filter(candidate -> canTraverseHeight(currentY, candidate.y())).isPresent()) ) {
+                continue;
+            }
+
+            if( !hasClearMovementPath(nodeLocation(world, node), nodeLocation(world, neighbor.get()), true) ) {
+                continue;
+            }
+
+            neighbors.add(neighbor.get());
+        }
+
+        return neighbors;
+    }
+
+    private Optional<PathNode> walkablePathNodeAt(World world, int x, int z, double referenceY) {
+        int referenceHalf = (int) Math.round(referenceY * 2.0D);
+        int maxUp = Math.max(0, (int) Math.ceil(this.settings.pathfindingMaxStepHeight() * 2.0D));
+        int maxDown = Math.max(0, (int) Math.ceil(this.settings.pathfindingMaxDropHeight() * 2.0D));
+
+        for( int offset : orderedHeightOffsets(maxUp, maxDown) ) {
+            int yHalf = referenceHalf + offset;
+            double y = yHalf / 2.0D;
+            if( y < world.getMinHeight() || y > world.getMaxHeight() - 2 ) {
+                continue;
+            }
+
+            PathNode node = new PathNode(x, yHalf, z);
+            Location location = nodeLocation(world, node);
+            if( isPathWalkableLocation(location) ) {
+                return Optional.of(node);
+            }
+        }
+
+        return Optional.empty();
+    }
+
+    private List<Integer> orderedHeightOffsets(int maxUp, int maxDown) {
+        List<Integer> offsets = new ArrayList<>(maxUp + maxDown + 1);
+        offsets.add(0);
+        int max = Math.max(maxUp, maxDown);
+        for( int step = 1; step <= max; step++ ) {
+            if( step <= maxUp ) {
+                offsets.add(step);
+            }
+            if( step <= maxDown ) {
+                offsets.add(-step);
+            }
+        }
+
+        return offsets;
+    }
+
+    private boolean canTraverseHeight(double fromY, double toY) {
+        return toY - fromY <= this.settings.pathfindingMaxStepHeight() + 0.01D
+                && fromY - toY <= this.settings.pathfindingMaxDropHeight() + 0.01D;
+    }
+
+    private boolean exceedsPathRange(PathNode start, PathNode goal, PathNode candidate, double maxRange) {
+        int margin = this.settings.pathfindingSearchMargin();
+        int minX = Math.min(start.x, goal.x) - margin;
+        int maxX = Math.max(start.x, goal.x) + margin;
+        int minZ = Math.min(start.z, goal.z) - margin;
+        int maxZ = Math.max(start.z, goal.z) + margin;
+        if( candidate.x < minX || candidate.x > maxX || candidate.z < minZ || candidate.z > maxZ ) {
+            return true;
+        }
+
+        double dx = candidate.x - start.x;
+        double dz = candidate.z - start.z;
+        return dx * dx + dz * dz > maxRange * maxRange;
+    }
+
+    private double pathMoveCost(World world, PathNode from, PathNode to) {
+        double dx = Math.abs(to.x - from.x);
+        double dz = Math.abs(to.z - from.z);
+        double baseCost = dx != 0.0D && dz != 0.0D ? Math.sqrt(2.0D) : 1.0D;
+        double verticalCost = Math.abs(to.y() - from.y()) * this.settings.pathfindingVerticalPenalty();
+        return baseCost + verticalCost + pathHazardCost(world, to);
+    }
+
+    private double pathHeuristic(PathNode from, PathNode to) {
+        double dx = Math.abs(from.x - to.x);
+        double dz = Math.abs(from.z - to.z);
+        double diagonal = Math.min(dx, dz);
+        double straight = Math.max(dx, dz) - diagonal;
+        double y = Math.abs(from.y() - to.y()) * this.settings.pathfindingVerticalPenalty();
+        return (diagonal * Math.sqrt(2.0D) + straight + y) * this.settings.pathfindingHeuristicWeight();
+    }
+
+    private List<Location> pathLocations(World world, PathSearchNode endNode) {
+        List<Location> locations = new ArrayList<>();
+        PathSearchNode cursor = endNode;
+        while( cursor != null ) {
+            locations.add(nodeLocation(world, cursor.node));
+            cursor = cursor.parent;
+        }
+
+        Collections.reverse(locations);
+        if( !locations.isEmpty() ) {
+            locations.remove(0);
+        }
+
+        return locations;
+    }
+
+    private Location nodeLocation(World world, PathNode node) {
+        return new Location(world, node.x + 0.5D, node.y(), node.z + 0.5D);
+    }
+
+    private boolean isPathWalkableLocation(Location location) {
+        return canOccupy(location) && hasStandingSurface(location);
+    }
+
+    private boolean hasStandingSurface(Location location) {
+        Block feet = location.getBlock();
+        if( isPartialStepBlock(feet) && location.getY() + 0.02D >= blockSurfaceY(feet) && location.getY() < feet.getY() + 1.0D ) {
+            return true;
+        }
+
+        Block below = location.clone().subtract(0.0D, 0.05D, 0.0D).getBlock();
+        return !below.isPassable() || isPartialStepBlock(below);
+    }
+
+    private double pathHazardCost(World world, PathNode node) {
+        if( !this.settings.pathfindingAvoidHazards() ) {
+            return 0.0D;
+        }
+
+        return hasPathHazard(nodeLocation(world, node)) ? this.settings.pathfindingHazardPenalty() : 0.0D;
+    }
+
+    private boolean hasPathHazard(Location location) {
+        Block feet = location.getBlock();
+        Block below = location.clone().subtract(0.0D, 0.05D, 0.0D).getBlock();
+        Block head = location.clone().add(0.0D, 1.0D, 0.0D).getBlock();
+        return isHazard(feet.getType()) || isHazard(below.getType()) || isHazard(head.getType());
+    }
+
+    private boolean isHazard(Material material) {
+        return switch( material ) {
+            case LAVA, FIRE, SOUL_FIRE, MAGMA_BLOCK, CACTUS, CAMPFIRE, SOUL_CAMPFIRE -> true;
+            default -> false;
+        };
+    }
+
     private boolean moveTo(ArmorStand soldier, Location location) {
-        if( canOccupy(location) ) {
-            soldier.teleport(location);
+        Optional<Location> resolved = resolveOccupyLocation(soldier.getLocation(), location);
+        if( resolved.isPresent() ) {
+            soldier.teleport(resolved.get());
             return true;
         }
 
@@ -623,19 +1337,22 @@ public final class ClaySoldierService {
     }
 
     private boolean tryBlockedMovement(ArmorStand soldier, Location current, Vector direction, double stepSize) {
-        Vector firstSide = perpendicular(direction).multiply(this.random.nextBoolean() ? 1.0D : -1.0D);
-        Vector secondSide = firstSide.clone().multiply(-1.0D);
+        int side = this.random.nextBoolean() ? 1 : -1;
+        double sideStep = Math.max(stepSize * this.settings.pathfindingSideStepMultiplier(), this.settings.pathfindingDetourProbeDistance());
+        double backStep = Math.max(stepSize * this.settings.pathfindingBackStepMultiplier(), this.settings.pathfindingDetourProbeDistance() * 0.65D);
+
+        for( double degrees : new double[] {25.0D, 45.0D, 70.0D, 95.0D, 130.0D} ) {
+            if( tryStep(soldier, current, rotateY(direction, degrees * side), sideStep) ) {
+                return true;
+            }
+
+            if( tryStep(soldier, current, rotateY(direction, -degrees * side), sideStep) ) {
+                return true;
+            }
+        }
+
         Vector reverse = direction.clone().multiply(-1.0D);
-
-        if( tryStep(soldier, current, firstSide, stepSize * 0.75D) ) {
-            return true;
-        }
-
-        if( tryStep(soldier, current, secondSide, stepSize * 0.75D) ) {
-            return true;
-        }
-
-        if( tryStep(soldier, current, reverse, stepSize * 0.60D) ) {
+        if( tryStep(soldier, current, reverse, backStep) ) {
             return true;
         }
 
@@ -646,13 +1363,184 @@ public final class ClaySoldierService {
     private boolean tryStep(ArmorStand soldier, Location current, Vector direction, double stepSize) {
         Location next = current.clone().add(direction.clone().multiply(stepSize));
         next.setDirection(direction);
-        return moveTo(soldier, next);
+        return hasClearMovementPath(current, next) && moveTo(soldier, next);
+    }
+
+    private Vector rotateY(Vector direction, double degrees) {
+        double radians = Math.toRadians(degrees);
+        double cos = Math.cos(radians);
+        double sin = Math.sin(radians);
+        double x = direction.getX() * cos - direction.getZ() * sin;
+        double z = direction.getX() * sin + direction.getZ() * cos;
+        return new Vector(x, 0.0D, z).normalize();
     }
 
     private boolean canOccupy(Location location) {
         Block feet = location.getBlock();
         Block head = location.clone().add(0.0D, 1.0D, 0.0D).getBlock();
-        return feet.isPassable() && head.isPassable();
+        return canOccupyFeet(feet, location) && head.isPassable();
+    }
+
+    private boolean canOccupyFeet(Block feet, Location location) {
+        if( feet.isPassable() ) {
+            return true;
+        }
+
+        return isPartialStepBlock(feet)
+                && location.getY() + 0.02D >= blockSurfaceY(feet)
+                && location.getY() < feet.getY() + 1.0D;
+    }
+
+    private Optional<Location> resolveOccupyLocation(Location current, Location target) {
+        if( canOccupy(target) ) {
+            return Optional.of(target);
+        }
+
+        Optional<Location> stepped = resolveStepLocation(current, target);
+        if( stepped.isPresent() ) {
+            return stepped;
+        }
+
+        int maxStepHeight = Math.max(0, (int) Math.floor(this.settings.pathfindingMaxStepHeight()));
+        for( int stepHeight = 1; stepHeight <= maxStepHeight; stepHeight++ ) {
+            Location steppedLocation = target.clone().add(0.0D, stepHeight, 0.0D);
+            if( canOccupy(steppedLocation) ) {
+                if( this.settings.useJumping() ) {
+                    spawnParticle(Particle.CLOUD, steppedLocation, scaledCount(1), 0.04D, 0.02D, 0.04D, 0.004D);
+                }
+                return Optional.of(steppedLocation);
+            }
+        }
+
+        return Optional.empty();
+    }
+
+    private Optional<Location> resolveStepLocation(Location current, Location target) {
+        if( !this.settings.pathfindingEnabled() ) {
+            return Optional.empty();
+        }
+
+        Block obstacle = target.getBlock();
+        if( obstacle.isPassable() ) {
+            Vector direction = target.toVector().subtract(current.toVector());
+            direction.setY(0.0D);
+            if( direction.lengthSquared() < MIN_MOVE_DISTANCE_SQUARED ) {
+                return Optional.empty();
+            }
+
+            direction.normalize();
+            obstacle = current.clone()
+                    .add(direction.multiply(Math.min(this.settings.pathfindingDetourProbeDistance(), Math.max(this.settings.moveStep(), current.distance(target) + 0.10D))))
+                    .getBlock();
+        }
+
+        if( !isStepObstacle(obstacle) || !obstacle.getRelative(0, 1, 0).isPassable() ) {
+            return Optional.empty();
+        }
+
+        Location stepped = target.clone();
+        stepped.setY(blockSurfaceY(obstacle));
+        return canOccupy(stepped) ? Optional.of(stepped) : Optional.empty();
+    }
+
+    private boolean hasClearMovementPath(Location from, Location to) {
+        return hasClearMovementPath(from, to, false);
+    }
+
+    private boolean hasClearMovementPath(Location from, Location to, boolean allowHazards) {
+        if( !this.settings.pathfindingEnabled() ) {
+            return true;
+        }
+
+        Vector delta = to.toVector().subtract(from.toVector());
+        double distance = delta.length();
+        if( distance < 0.001D ) {
+            return true;
+        }
+
+        int samples = Math.max(1, (int) Math.ceil(distance / Math.max(0.05D, this.settings.pathfindingObstacleProbeDistance())));
+        Vector step = delta.multiply(1.0D / samples);
+        for( int i = 1; i <= samples; i++ ) {
+            Location sample = from.clone().add(step.clone().multiply(i));
+            if( !allowHazards && this.settings.pathfindingAvoidHazards() && hasPathHazard(sample) ) {
+                return false;
+            }
+            if( canOccupy(sample) || resolveStepLocation(from, sample).isPresent() ) {
+                continue;
+            }
+
+            return false;
+        }
+
+        return true;
+    }
+
+    private boolean hasAttackLineOfSight(ArmorStand soldier, ArmorStand target) {
+        if( !this.settings.requireLineOfSightForAttacks() ) {
+            return true;
+        }
+
+        Location start = soldier.getLocation().clone().add(0.0D, 0.58D, 0.0D);
+        Location end = target.getLocation().clone().add(0.0D, 0.58D, 0.0D);
+        Vector delta = end.toVector().subtract(start.toVector());
+        double distance = delta.length();
+        if( distance < 0.001D ) {
+            return true;
+        }
+
+        int samples = Math.max(1, (int) Math.ceil(distance / Math.max(0.05D, this.settings.pathfindingLineOfSightProbeDistance())));
+        Vector step = delta.multiply(1.0D / samples);
+        for( int i = 1; i < samples; i++ ) {
+            Location sample = start.clone().add(step.clone().multiply(i));
+            if( blocksAttackLineOfSight(sample) ) {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    private boolean blocksAttackLineOfSight(Location sample) {
+        Block block = sample.getBlock();
+        if( block.isPassable() ) {
+            return false;
+        }
+
+        return !isPartialStepBlock(block) || sample.getY() <= blockSurfaceY(block) + 0.05D;
+    }
+
+    private boolean isStepObstacle(Block block) {
+        if( isSlab(block) ) {
+            return this.settings.pathfindingAllowSlabs();
+        }
+        if( isStairs(block) ) {
+            return this.settings.pathfindingAllowStairs();
+        }
+
+        return this.settings.pathfindingAllowOneBlockStep()
+                && block.getType().isSolid()
+                && block.getType().isOccluding();
+    }
+
+    private boolean isPartialStepBlock(Block block) {
+        return (this.settings.pathfindingAllowSlabs() && isSlab(block))
+                || (this.settings.pathfindingAllowStairs() && isStairs(block));
+    }
+
+    private boolean isSlab(Block block) {
+        return block.getBlockData() instanceof Slab;
+    }
+
+    private boolean isStairs(Block block) {
+        return block.getType().name().endsWith("_STAIRS");
+    }
+
+    private double blockSurfaceY(Block block) {
+        if( block.getBlockData() instanceof Slab slab && slab.getType() == Slab.Type.BOTTOM ) {
+            return block.getY() + 0.5D;
+        }
+
+        return block.getY() + 1.0D;
     }
 
     private void face(ArmorStand soldier, Location target) {
@@ -677,8 +1565,44 @@ public final class ClaySoldierService {
         soldier.teleport(current);
     }
 
-    private double attackRange(ClaySoldierRole role) {
-        return this.settings.attackRange() * this.settings.role(role).rangeMultiplier();
+    private double attackRange(ArmorStand soldier, ClaySoldierRole role) {
+        return this.settings.attackRange() * rangeMultiplier(soldier, this.settings.role(role));
+    }
+
+    private double healthMultiplier(ArmorStand soldier, ClaySoldierSettings.RoleTuning roleTuning) {
+        return roleTuning.healthMultiplier() + getModifiers(soldier).stream()
+                .map(this.settings::modifier)
+                .mapToDouble(ClaySoldierSettings.ModifierTuning::healthMultiplierBonus)
+                .sum();
+    }
+
+    private double damageMultiplier(ArmorStand soldier, ClaySoldierSettings.RoleTuning roleTuning) {
+        return roleTuning.damageMultiplier() + getModifiers(soldier).stream()
+                .map(this.settings::modifier)
+                .mapToDouble(ClaySoldierSettings.ModifierTuning::damageMultiplierBonus)
+                .sum();
+    }
+
+    private double speedMultiplier(ArmorStand soldier, ClaySoldierSettings.RoleTuning roleTuning) {
+        return roleTuning.speedMultiplier() + getModifiers(soldier).stream()
+                .map(this.settings::modifier)
+                .mapToDouble(ClaySoldierSettings.ModifierTuning::speedMultiplierBonus)
+                .sum();
+    }
+
+    private double rangeMultiplier(ArmorStand soldier, ClaySoldierSettings.RoleTuning roleTuning) {
+        return roleTuning.rangeMultiplier() + getModifiers(soldier).stream()
+                .map(this.settings::modifier)
+                .mapToDouble(ClaySoldierSettings.ModifierTuning::rangeMultiplierBonus)
+                .sum();
+    }
+
+    private double cooldownMultiplier(ArmorStand soldier) {
+        return getModifiers(soldier).stream()
+                .map(this.settings::modifier)
+                .mapToDouble(ClaySoldierSettings.ModifierTuning::cooldownMultiplier)
+                .filter(value -> value > 0.0D)
+                .reduce(1.0D, (left, right) -> left * right);
     }
 
     private Vector horizontalDirection(Location from, Location to) {
@@ -698,11 +1622,43 @@ public final class ClaySoldierService {
 
     private double getHealth(ArmorStand soldier) {
         Double health = soldier.getPersistentDataContainer().get(this.healthKey, PersistentDataType.DOUBLE);
-        return health == null ? maxHealth(getRole(soldier)) : health;
+        return health == null ? maxHealth(soldier) : health;
     }
 
-    private double maxHealth(ClaySoldierRole role) {
-        return this.settings.maxHealth() * this.settings.role(role).healthMultiplier();
+    private double maxHealth(ArmorStand soldier) {
+        return maxHealth(getRole(soldier), getModifiers(soldier));
+    }
+
+    private double maxHealth(ClaySoldierRole role, Set<ClaySoldierModifier> modifiers) {
+        double modifierBonus = modifiers.stream()
+                .map(this.settings::modifier)
+                .mapToDouble(ClaySoldierSettings.ModifierTuning::healthMultiplierBonus)
+                .sum();
+        return this.settings.maxHealth() * (this.settings.role(role).healthMultiplier() + modifierBonus);
+    }
+
+    private Set<ClaySoldierModifier> getModifiers(Entity entity) {
+        if( !isSoldier(entity) ) {
+            return Set.of();
+        }
+
+        String serialized = entity.getPersistentDataContainer().get(this.modifiersKey, PersistentDataType.STRING);
+        if( serialized == null || serialized.isBlank() ) {
+            return Set.of();
+        }
+
+        Set<ClaySoldierModifier> modifiers = new HashSet<>();
+        for( String value : serialized.split(",") ) {
+            ClaySoldierModifier.fromKey(value.trim()).ifPresent(modifiers::add);
+        }
+
+        return Set.copyOf(modifiers);
+    }
+
+    private String serializeModifiers(Set<ClaySoldierModifier> modifiers) {
+        return modifiers.stream()
+                .map(ClaySoldierModifier::key)
+                .collect(java.util.stream.Collectors.joining(","));
     }
 
     private void updateNameplate(ArmorStand soldier) {
@@ -713,7 +1669,7 @@ public final class ClaySoldierService {
 
         Optional<ClayTeam> team = getTeam(soldier);
         ClaySoldierRole role = getRole(soldier);
-        double maxHealth = Math.max(1.0D, maxHealth(role));
+        double maxHealth = Math.max(1.0D, maxHealth(soldier));
         double health = Math.max(0.0D, Math.min(maxHealth, getHealth(soldier)));
 
         Component nameplate = Component.empty();
@@ -727,6 +1683,12 @@ public final class ClaySoldierService {
         if( this.settings.nameplateShowRole() ) {
             nameplate = appendSpaceIfNeeded(nameplate, hasContent)
                     .append(Component.text(role.displayName(), role.textColor()));
+            hasContent = true;
+        }
+
+        if( brain(soldier).activeFormation.isActive() && !this.settings.nameplateFormationIndicator().isBlank() ) {
+            nameplate = appendSpaceIfNeeded(nameplate, hasContent)
+                    .append(Component.text(this.settings.nameplateFormationIndicator(), NamedTextColor.GOLD));
             hasContent = true;
         }
 
@@ -751,24 +1713,42 @@ public final class ClaySoldierService {
         int segments = this.settings.nameplateHealthBarSegments();
         double ratio = Math.max(0.0D, Math.min(1.0D, health / maxHealth));
         int filledSegments = Math.max(0, Math.min(segments, (int) Math.round(ratio * segments)));
-        int emptySegments = segments - filledSegments;
+        int lostSegments = segments - filledSegments;
 
-        return Component.text("[", NamedTextColor.DARK_GRAY)
-                .append(Component.text("|".repeat(filledSegments), healthColor(ratio)))
-                .append(Component.text("|".repeat(emptySegments), NamedTextColor.RED))
-                .append(Component.text("]", NamedTextColor.DARK_GRAY));
+        return Component.text(this.settings.nameplateBarPrefix(), namedColor(this.settings.nameplateBarBracketColor(), NamedTextColor.DARK_GRAY))
+                .append(Component.text(repeatSymbol(this.settings.nameplateBarFilledSymbol(), filledSegments), healthColor(ratio)))
+                .append(Component.text(repeatSymbol(this.settings.nameplateBarLostSymbol(), lostSegments), namedColor(this.settings.nameplateBarLostColor(), NamedTextColor.RED)))
+                .append(Component.text(this.settings.nameplateBarSuffix(), namedColor(this.settings.nameplateBarBracketColor(), NamedTextColor.DARK_GRAY)));
     }
 
     private NamedTextColor healthColor(double ratio) {
         if( ratio <= this.settings.nameplateLowThreshold() ) {
-            return NamedTextColor.RED;
+            return namedColor(this.settings.nameplateBarLowColor(), NamedTextColor.RED);
         }
 
         if( ratio < this.settings.nameplateHealthyThreshold() ) {
-            return NamedTextColor.YELLOW;
+            return namedColor(this.settings.nameplateBarInjuredColor(), NamedTextColor.YELLOW);
         }
 
-        return NamedTextColor.GREEN;
+        return namedColor(this.settings.nameplateBarHealthyColor(), NamedTextColor.GREEN);
+    }
+
+    private NamedTextColor namedColor(String configured, NamedTextColor fallback) {
+        if( configured == null || configured.isBlank() ) {
+            return fallback;
+        }
+
+        NamedTextColor color = NamedTextColor.NAMES.value(configured.toLowerCase(Locale.ROOT));
+        return color == null ? fallback : color;
+    }
+
+    private String repeatSymbol(String symbol, int count) {
+        if( count <= 0 ) {
+            return "";
+        }
+
+        String safeSymbol = symbol == null || symbol.isEmpty() ? "|" : symbol;
+        return safeSymbol.repeat(count);
     }
 
     private String formatHealth(double value) {
@@ -793,7 +1773,7 @@ public final class ClaySoldierService {
                 new Particle.DustOptions(value.armorColor(), 0.8F)));
 
         if( this.settings.dropDollOnDeath() ) {
-            team.ifPresent(value -> world.dropItemNaturally(location, this.items.createSoldierDoll(value, role, 1)));
+            team.ifPresent(value -> world.dropItemNaturally(location, this.items.createSoldierDoll(value, role, 1, getModifiers(soldier))));
         }
 
         removeSoldier(soldier);
@@ -989,6 +1969,43 @@ public final class ClaySoldierService {
         WINDUP_SLING
     }
 
+    private enum TacticalFormation {
+        NONE,
+        SHIELD_WALL,
+        SPEAR_WALL,
+        COMBINED_SPEAR_WALL,
+        SUPPORT_HIDE,
+        FLANK_SUPPORT;
+
+        private boolean isActive() {
+            return this != NONE;
+        }
+
+        private boolean isWall() {
+            return this == SHIELD_WALL || this == SPEAR_WALL || this == COMBINED_SPEAR_WALL;
+        }
+    }
+
+    private record PathNode(int x, int yHalf, int z) {
+        private double y() {
+            return this.yHalf / 2.0D;
+        }
+    }
+
+    private static final class PathSearchNode {
+        private final PathNode node;
+        private final PathSearchNode parent;
+        private final double gCost;
+        private final double fCost;
+
+        private PathSearchNode(PathNode node, PathSearchNode parent, double gCost, double fCost) {
+            this.node = node;
+            this.parent = parent;
+            this.gCost = gCost;
+            this.fCost = fCost;
+        }
+    }
+
     private static final class SoldierBrain {
         private int attackCooldownTicks;
         private int dodgeCooldownTicks;
@@ -999,13 +2016,19 @@ public final class ClaySoldierService {
         private UUID queuedTargetId;
         private AttackStyle queuedAttack;
         private AnimationState animation = AnimationState.IDLE;
+        private TacticalFormation activeFormation = TacticalFormation.NONE;
         private boolean movedThisTick;
+        private List<Location> path = List.of();
+        private int pathIndex;
+        private Location pathTarget;
+        private int pathRefreshTicks;
 
         private void tick(int tickPeriod) {
             this.attackCooldownTicks = Math.max(0, this.attackCooldownTicks - tickPeriod);
             this.dodgeCooldownTicks = Math.max(0, this.dodgeCooldownTicks - tickPeriod);
             this.animationTicks = Math.max(0, this.animationTicks - tickPeriod);
             this.flankTicks = Math.max(0, this.flankTicks - tickPeriod);
+            this.pathRefreshTicks = Math.max(0, this.pathRefreshTicks - tickPeriod);
 
             if( this.animationTicks == 0 && this.windupTicks <= 0 ) {
                 this.animation = AnimationState.IDLE;
@@ -1021,6 +2044,13 @@ public final class ClaySoldierService {
             this.queuedTargetId = null;
             this.queuedAttack = null;
             this.windupTicks = 0;
+        }
+
+        private void clearPath() {
+            this.path = List.of();
+            this.pathIndex = 0;
+            this.pathTarget = null;
+            this.pathRefreshTicks = 0;
         }
     }
 }

@@ -17,14 +17,52 @@
   max-spawn-per-use: 64
   drop-doll-on-death: true
 
+  spawn-limits:
+    enabled: true
+    max-soldiers: 32
+    radius: 100.0
+
   nameplates:
     enabled: true
     show-team: true
     show-role: true
     show-health-text: true
+    formation-indicator: "[F]"
     health-bar-segments: 10
     healthy-threshold: 0.60
     low-threshold: 0.30
+    health-bar:
+      prefix: "["
+      suffix: "]"
+      filled-symbol: "|"
+      lost-symbol: "|"
+      empty-symbol: "-"
+      healthy-color: green
+      injured-color: yellow
+      low-color: red
+      lost-color: red
+      bracket-color: dark_gray
+
+  crafting:
+    enabled: true
+    recipes:
+      base-doll:
+        shaped-enabled: true
+        shapeless-enabled: true
+        output-amount: 4
+        # Default base doll recipe: CLAY_BALL + SOUL_SAND.
+        # The shaped version places the first ingredient over the second.
+        ingredients:
+          - CLAY_BALL
+          - SOUL_SAND
+    # Dynamic upgrade crafting: one clay soldier doll plus one ingredient.
+    # Role upgrades only apply to base warrior dolls and preserve team/modifiers.
+    team-recoloring-enabled: true
+    role-upgrades:
+      guard: IRON_INGOT
+      spearman: BAMBOO
+      skirmisher: FEATHER
+      slinger: SNOWBALL
 
   movement:
     # Random movement rolls: lower means more frequent wandering. 1 means every AI tick.
@@ -32,6 +70,32 @@
     skirmisher-wander-roll: 2
     wander-step-multiplier: 0.65
     close-combat-step-multiplier: 0.78
+    pathfinding-enabled: true
+    pathfinding-max-step-height: 1.0
+    pathfinding-side-step-multiplier: 0.90
+    pathfinding-back-step-multiplier: 0.60
+    pathfinding-allow-one-block-step: true
+    pathfinding-allow-stairs: true
+    pathfinding-allow-slabs: true
+    pathfinding-planner-enabled: true
+    pathfinding-max-nodes: 750
+    pathfinding-max-range: 24.0
+    pathfinding-search-margin: 8
+    pathfinding-route-refresh-ticks: 12
+    pathfinding-route-target-move-threshold: 1.15
+    pathfinding-waypoint-reach-distance: 0.34
+    pathfinding-allow-diagonal: true
+    pathfinding-avoid-corner-cutting: true
+    pathfinding-max-drop-height: 1.0
+    pathfinding-heuristic-weight: 1.0
+    pathfinding-vertical-penalty: 0.35
+    pathfinding-smooth-routes: true
+    pathfinding-avoid-hazards: true
+    pathfinding-hazard-penalty: 6.0
+    pathfinding-obstacle-probe-distance: 0.25
+    pathfinding-detour-probe-distance: 0.58
+    pathfinding-line-of-sight-probe-distance: 0.25
+    require-line-of-sight-for-attacks: true
 
   jumping:
     enabled: true
@@ -55,9 +119,29 @@
     sweep-splash-damage-multiplier: 0.65
     player-damage: 4.0
     creative-player-instant-kill: true
+    fire-damage: 6.0
+    lava-damage: 12.0
+    hot-floor-damage: 4.0
 
   formations:
     enabled: true
+    tactical-enabled: true
+    sound-enabled: true
+    # Tactical formations activate when at least this many same-team same-role soldiers are nearby.
+    tactical-min-soldiers: 4
+    tactical-scan-range: 8.0
+    tactical-speed-multiplier: 0.82
+    shield-wall-speed-multiplier: 0.45
+    tactical-damage-multiplier: 1.14
+    special-attack-damage-multiplier: 1.35
+    shield-wall-distance: 0.70
+    shield-wall-lateral-spacing: 0.34
+    shield-wall-row-spacing: 0.08
+    shield-wall-hold-radius: 0.55
+    spear-wall-distance: 1.05
+    support-behind-wall-distance: 1.65
+    flank-protection-width: 1.85
+    combined-wall-chance: 0.65
     columns: 5
     lateral-spacing: 0.50
     row-spacing: 0.34
@@ -157,6 +241,92 @@
       formation-depth: 1.20
       main-hand: SNOWBALL
       off-hand: none
+
+  modifiers:
+    reinforced:
+      enabled: true
+      ingredient: IRON_NUGGET
+      health-multiplier-bonus: 0.25
+      damage-multiplier-bonus: 0.0
+      speed-multiplier-bonus: 0.0
+      range-multiplier-bonus: 0.0
+      cooldown-multiplier: 1.0
+      splash-radius: 0.0
+      splash-damage-multiplier: 0.0
+      venom-damage: 0.0
+      lifesteal-amount: 0.0
+    swift:
+      enabled: true
+      ingredient: SUGAR
+      health-multiplier-bonus: 0.0
+      damage-multiplier-bonus: 0.0
+      speed-multiplier-bonus: 0.25
+      range-multiplier-bonus: 0.0
+      cooldown-multiplier: 0.86
+      splash-radius: 0.0
+      splash-damage-multiplier: 0.0
+      venom-damage: 0.0
+      lifesteal-amount: 0.0
+    fierce:
+      enabled: true
+      ingredient: FLINT
+      health-multiplier-bonus: 0.0
+      damage-multiplier-bonus: 0.25
+      speed-multiplier-bonus: 0.0
+      range-multiplier-bonus: 0.0
+      cooldown-multiplier: 1.0
+      splash-radius: 0.0
+      splash-damage-multiplier: 0.0
+      venom-damage: 0.0
+      lifesteal-amount: 0.0
+    longshot:
+      enabled: true
+      ingredient: AMETHYST_SHARD
+      health-multiplier-bonus: 0.0
+      damage-multiplier-bonus: 0.0
+      speed-multiplier-bonus: 0.0
+      range-multiplier-bonus: 0.35
+      cooldown-multiplier: 1.0
+      splash-radius: 0.0
+      splash-damage-multiplier: 0.0
+      venom-damage: 0.0
+      lifesteal-amount: 0.0
+    explosive:
+      enabled: true
+      ingredient: FIRE_CHARGE
+      health-multiplier-bonus: 0.0
+      damage-multiplier-bonus: 0.0
+      speed-multiplier-bonus: 0.0
+      range-multiplier-bonus: 0.0
+      cooldown-multiplier: 1.12
+      splash-radius: 1.15
+      splash-damage-multiplier: 0.35
+      venom-damage: 0.0
+      lifesteal-amount: 0.0
+    venom:
+      enabled: true
+      ingredient: SPIDER_EYE
+      health-multiplier-bonus: 0.0
+      damage-multiplier-bonus: 0.12
+      speed-multiplier-bonus: 0.0
+      range-multiplier-bonus: 0.0
+      cooldown-multiplier: 1.0
+      splash-radius: 0.0
+      splash-damage-multiplier: 0.0
+      venom-damage: 0.35
+      lifesteal-amount: 0.0
+    lifesteal:
+      enabled: true
+      ingredient: GHAST_TEAR
+      health-multiplier-bonus: 0.0
+      damage-multiplier-bonus: 0.0
+      speed-multiplier-bonus: 0.0
+      range-multiplier-bonus: 0.0
+      cooldown-multiplier: 1.08
+      splash-radius: 0.0
+      splash-damage-multiplier: 0.0
+      venom-damage: 0.0
+      lifesteal-amount: 0.65
 
   attacks:
     quick:
