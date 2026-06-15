@@ -1,5 +1,7 @@
 # ClaySoldiers
 
+[![CI](https://github.com/humankindmc/claysoldiers/actions/workflows/ci.yml/badge.svg)](https://github.com/humankindmc/claysoldiers/actions/workflows/ci.yml)
+
 ClaySoldiers is a Paper Minecraft plugin for survival-friendly Clay Soldier battles.
 
 Players can craft, customize, deploy, and command small clay armies that fight automatically using teams, roles, modifiers, formations, movement behavior, and configurable combat rules. This repository is only for the Clay Soldiers plugin.
