@@ -1,0 +1,74 @@
+name: Bug report
+description: Report a ClaySoldiers bug.
+title: "[Bug]: "
+labels:
+  - bug
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting a ClaySoldiers bug. Please include enough detail for maintainers to reproduce the issue.
+  - type: input
+    id: plugin-version
+    attributes:
+      label: ClaySoldiers version
+      description: The plugin version or jar name.
+      placeholder: "0.4.5"
+    validations:
+      required: true
+  - type: input
+    id: paper-version
+    attributes:
+      label: Paper version
+      description: Output from your server version command.
+      placeholder: "Paper 1.21.x build ..."
+    validations:
+      required: true
+  - type: input
+    id: java-version
+    attributes:
+      label: Java version
+      description: Output from java -version.
+      placeholder: "Java 25"
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: List the exact steps, commands, items, teams, roles, and config changes needed to reproduce.
+      placeholder: |
+        1. Start server with ...
+        2. Run /claysoldiers ...
+        3. Deploy ...
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+      description: What should have happened?
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+      description: What happened instead?
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs
+      description: Paste relevant server logs, stack traces, or console output.
+      render: text
+    validations:
+      required: false
+  - type: textarea
+    id: config-notes
+    attributes:
+      label: Config notes
+      description: Mention relevant config.yml or messages.yml changes. Remove secrets or unrelated server details.
+    validations:
+      required: false
