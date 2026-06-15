@@ -1,8 +1,8 @@
-name: HumankindGames
+name: ClaySoldiers
 version: ${version}
-main: com.humankindgames.HumankindGamesPlugin
+main: com.claysoldiers.ClaySoldiersPlugin
 api-version: '1.21'
-description: Small playable games for Paper, starting with a Clay Soldiers-inspired game module.
+description: A Clay Soldiers battle plugin for Paper.
 author: Lane
 commands:
   claysoldiers:
@@ -10,8 +10,7 @@ commands:
     usage: /claysoldiers <give|spawn|clear|teams|count>
     aliases:
       - csoldiers
-      - hkgclay
 permissions:
-  humankindgames.claysoldiers:
+  claysoldiers.claysoldiers:
     description: Allows use of Clay Soldiers admin commands.
     default: op

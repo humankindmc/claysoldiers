@@ -2,7 +2,7 @@ plugins {
     id("java")
 }
 
-group = "com.humankindgames"
+group = "com.claysoldiers"
 version = "0.4.5"
 
 repositories {

@@ -1,8 +1,6 @@
-# HumankindGames
+# ClaySoldiers
 
-**HumankindGames** is a Paper Minecraft plugin for small, playable server games.
-
-The current module is a **Clay Soldiers-inspired battle system**, allowing players to craft, customize, deploy, and command tiny clay armies in survival Minecraft.
+**ClaySoldiers** is a Paper Minecraft plugin for Clay Soldiers-inspired battles, allowing players to craft, customize, deploy, and command tiny clay armies in survival Minecraft.
 
 Players can create soldiers, assign them to teams, upgrade their roles, add modifiers, and watch them fight enemy teams with custom movement, attacks, dodging, flanking, formations, particles, sounds, and health displays.
 
@@ -11,7 +9,7 @@ Players can create soldiers, assign them to teams, upgrade their roles, add modi
 ## Current Version
 
 ```text
-HumankindGames 0.4.5
+ClaySoldiers 0.4.5
 Paper 26.1.2
 ```
 
@@ -471,13 +469,12 @@ Aliases:
 
 ```text
 /csoldiers
-/hkgclay
 ```
 
 Permission:
 
 ```text
-humankindgames.claysoldiers
+claysoldiers.claysoldiers
 ```
 
 By default, this permission is available to operators.
@@ -695,9 +692,7 @@ Server owners should review `config.yml` before running large public battles.
 
 # Development Status
 
-HumankindGames currently focuses on the Clay Soldiers module.
-
-Future modules may expand the plugin into additional small games, but the current gameplay system is centered on survival-friendly Clay Soldier battles.
+ClaySoldiers focuses only on survival-friendly Clay Soldier battles.
 
 ---
 

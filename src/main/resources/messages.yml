@@ -1,4 +1,4 @@
-﻿commands:
+commands:
   no-permission: '&cYou do not have permission to use this command.'
   active-count: '&eActive clay soldiers: {count}'
   usage-give: '&cUsage: /claysoldiers give <team> [amount] [player]'
@@ -16,7 +16,7 @@
   team-line: ' &7- &f{key} &7({team_color}{team}&7)'
   roles-header: '&eClay soldier roles:'
   role-line: ' &7- &f{key} &7({role_color}{role}&7): {description}'
-  help-header: '&eHumankindGames Clay Soldiers'
+  help-header: '&eClay Soldiers'
   help-give: '&7/{label} give <team> [amount] [player]'
   help-give-role: '&7/{label} give <team> [role] [amount] [player]'
   help-spawn: '&7/{label} spawn <team> [amount] [role]'

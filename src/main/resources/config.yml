@@ -1,4 +1,4 @@
-﻿clay-soldiers:
+clay-soldiers:
   # Core stats. These are multiplied by the role and attack sections below.
   max-health: 20.0
   attack-damage: 1.0
