@@ -6,8 +6,8 @@ description: A Clay Soldiers battle plugin for Paper.
 author: Lane
 commands:
   claysoldiers:
-    description: Manage Clay Soldiers test features.
-    usage: /claysoldiers <give|spawn|clear|teams|count>
+    description: Manage Clay Soldiers.
+    usage: /claysoldiers <give|spawn|clear|teams|roles|count>
     aliases:
       - csoldiers
 permissions:
