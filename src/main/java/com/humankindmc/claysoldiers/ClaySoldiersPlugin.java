@@ -1,11 +1,5 @@
-package com.claysoldiers;
+package com.humankindmc.claysoldiers;
 
-import com.claysoldiers.claysoldiers.ClaySoldierItems;
-import com.claysoldiers.claysoldiers.ClaySoldierListener;
-import com.claysoldiers.claysoldiers.ClaySoldierMessages;
-import com.claysoldiers.claysoldiers.ClaySoldierService;
-import com.claysoldiers.claysoldiers.ClaySoldierSettings;
-import com.claysoldiers.claysoldiers.ClaySoldiersCommand;
 import java.util.Objects;
 import org.bukkit.command.PluginCommand;
 import org.bukkit.plugin.java.JavaPlugin;

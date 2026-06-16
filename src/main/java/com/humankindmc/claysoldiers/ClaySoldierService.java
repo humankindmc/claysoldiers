@@ -1,4 +1,4 @@
-package com.claysoldiers.claysoldiers;
+package com.humankindmc.claysoldiers;
 
 import java.util.ArrayList;
 import java.util.Comparator;
