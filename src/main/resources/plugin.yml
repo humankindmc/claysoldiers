@@ -1,6 +1,6 @@
 name: ClaySoldiers
 version: ${version}
-main: com.claysoldiers.ClaySoldiersPlugin
+main: com.humankindmc.claysoldiers.ClaySoldiersPlugin
 api-version: '1.21'
 description: A Clay Soldiers battle plugin for Paper.
 author: Lane

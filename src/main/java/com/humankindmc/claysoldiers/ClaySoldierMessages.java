@@ -1,4 +1,4 @@
-package com.claysoldiers.claysoldiers;
+package com.humankindmc.claysoldiers;
 
 import java.io.File;
 import java.util.ArrayList;
